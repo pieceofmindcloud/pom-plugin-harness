@@ -26,7 +26,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFile
 import http from "node:http";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import path, { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -79,12 +79,12 @@ function shutdown(code = 0) {
  * socket under the plugin data directory when it fits, else in a private
  * directory under the system temp dir named after that data directory.
  */
-export function socketPath(homeDir, tempDir = tmpdir()) {
-  if (isWindows) return undefined;
-  const preferred = join(homeDir, "herdr.sock");
+export function socketPath(homeDir, tempDir = tmpdir(), platform = process.platform) {
+  if (platform === "win32") return undefined;
+  const preferred = path.posix.join(homeDir, "herdr.sock");
   if (Buffer.byteLength(preferred) <= 90) return preferred;
   const id = createHash("sha256").update(homeDir).digest("hex").slice(0, 16);
-  return join(tempDir, `pom-pi-${id}`, "herdr.sock");
+  return path.posix.join(tempDir, `pom-pi-${id}`, "herdr.sock");
 }
 
 /**
@@ -93,21 +93,35 @@ export function socketPath(homeDir, tempDir = tmpdir()) {
  * or provider key of the host never leaks in.
  */
 export function privateEnv(options) {
+  const platform = options.platform ?? process.platform;
+  const windows = platform === "win32";
+  const paths = windows ? path.win32 : path.posix;
   const keep = ["LANG", "LC_ALL", "LC_CTYPE", "TZ", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP"];
   const result = {};
   for (const name of keep) if (options.base[name] !== undefined) result[name] = options.base[name];
-  const system = isWindows ? [options.base.PATH ?? ""] : ["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+  const systemRoot = options.base.SYSTEMROOT ?? options.base.SystemRoot ?? "C:\\Windows";
+  const system = windows
+    ? [paths.join(systemRoot, "System32"), systemRoot, paths.join(systemRoot, "System32", "WindowsPowerShell", "v1.0")]
+    : ["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+  // herdr reads %APPDATA%\herdr on Windows and ~/.config/herdr elsewhere.
+  const appData = paths.join(options.home, "AppData", "Roaming");
+  const configDir = windows ? paths.join(appData, "herdr") : paths.join(options.home, ".config", "herdr");
   Object.assign(result, {
     HOME: options.home,
     USERPROFILE: options.home,
-    PATH: [options.binDir, dirname(options.herdrBin), ...system].join(isWindows ? ";" : ":"),
+    PATH: [options.binDir, paths.dirname(options.herdrBin), ...system].join(windows ? ";" : ":"),
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
-    SHELL: options.shell,
-    HERDR_CONFIG_PATH: join(options.home, ".config", "herdr", "config.toml"),
-    PI_CODING_AGENT_DIR: join(options.home, ".pi", "agent"),
+    HERDR_CONFIG_PATH: paths.join(configDir, "config.toml"),
+    PI_CODING_AGENT_DIR: paths.join(options.home, ".pi", "agent"),
     POM_API_KEY: options.apiKey,
   });
+  if (windows) {
+    result.APPDATA = appData;
+    result.LOCALAPPDATA = paths.join(options.home, "AppData", "Local");
+  } else {
+    result.SHELL = options.shell;
+  }
   if (options.socket) result.HERDR_SOCKET_PATH = options.socket;
   return result;
 }
@@ -140,10 +154,9 @@ export function herdrConfig(shell) {
   return lines.join("\n");
 }
 
-function writeHerdrConfig(shell) {
-  const path = join(home, ".config", "herdr", "config.toml");
-  mkdirSync(dirname(path), { recursive: true });
-  if (!existsSync(path)) writeFileSync(path, herdrConfig(shell));
+function writeHerdrConfig(configPath, shell) {
+  mkdirSync(dirname(configPath), { recursive: true });
+  if (!existsSync(configPath)) writeFileSync(configPath, herdrConfig(shell));
 }
 
 /**
@@ -411,7 +424,8 @@ async function main() {
   const shell = pickShell();
   const runEnv = privateEnv({ base: env, home, binDir, herdrBin, shell, apiKey: llmApiKey, socket });
   writePiWrapper();
-  writeHerdrConfig(shell);
+  if (runEnv.LOCALAPPDATA) mkdirSync(runEnv.LOCALAPPDATA, { recursive: true });
+  writeHerdrConfig(runEnv.HERDR_CONFIG_PATH, shell);
   writePiTrust();
 
   let modelIds = [];

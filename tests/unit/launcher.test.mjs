@@ -22,6 +22,7 @@ test("herdr and pi get a private environment, never the host's herdr session", (
     LANG: "pt_BR.UTF-8",
   };
   const result = privateEnv({
+    platform: "linux",
     base,
     home: "/data/pi_harness/data/home",
     binDir: "/data/pi_harness/data/bin",
@@ -39,14 +40,47 @@ test("herdr and pi get a private environment, never the host's herdr session", (
   assert.equal(result.LANG, "pt_BR.UTF-8");
   assert.ok(result.PATH.startsWith("/data/pi_harness/data/bin:/data/pi_harness/runtime/abc/bin:"));
   assert.ok(!result.PATH.includes("/opt/homebrew"));
+  assert.equal(result.HERDR_CONFIG_PATH, "/data/pi_harness/data/home/.config/herdr/config.toml");
+  assert.equal(result.SHELL, "/bin/bash");
+});
+
+test("on Windows herdr's %APPDATA% and the system PATH stay private too", () => {
+  const result = privateEnv({
+    platform: "win32",
+    base: {
+      PATH: "C:\\Users\\someone\\bin;C:\\Windows\\System32",
+      SYSTEMROOT: "C:\\Windows",
+      APPDATA: "C:\\Users\\someone\\AppData\\Roaming",
+      HERDR_SESSION: "fleet",
+    },
+    home: "D:\\pom\\pi_harness\\data\\home",
+    binDir: "D:\\pom\\pi_harness\\data\\bin",
+    herdrBin: "D:\\pom\\pi_harness\\runtime\\abc\\bin\\herdr.exe",
+    shell: "",
+    apiKey: "sk-pom",
+  });
+  assert.equal(result.APPDATA, "D:\\pom\\pi_harness\\data\\home\\AppData\\Roaming");
+  assert.equal(result.LOCALAPPDATA, "D:\\pom\\pi_harness\\data\\home\\AppData\\Local");
+  assert.equal(
+    result.HERDR_CONFIG_PATH,
+    "D:\\pom\\pi_harness\\data\\home\\AppData\\Roaming\\herdr\\config.toml",
+  );
+  assert.equal(
+    result.PATH,
+    "D:\\pom\\pi_harness\\data\\bin;D:\\pom\\pi_harness\\runtime\\abc\\bin;C:\\Windows\\System32;C:\\Windows;C:\\Windows\\System32\\WindowsPowerShell\\v1.0",
+  );
+  assert.equal(result.HERDR_SESSION, undefined);
+  assert.equal(result.HERDR_SOCKET_PATH, undefined);
+  assert.equal(result.SHELL, undefined, "herdr picks its Windows default shell");
 });
 
 test("the herdr socket path stays short enough for a Unix socket", () => {
-  assert.equal(socketPath("/data/pi_harness/data/home"), "/data/pi_harness/data/home/herdr.sock");
+  assert.equal(socketPath("/data/pi_harness/data/home", "/tmp", "linux"), "/data/pi_harness/data/home/herdr.sock");
   const long = `/Users/someone/Library/Application Support/pom/${"x".repeat(80)}/home`;
-  const fallback = socketPath(long, "/tmp");
+  const fallback = socketPath(long, "/tmp", "darwin");
   assert.match(fallback, /^\/tmp\/pom-pi-[0-9a-f]{16}\/herdr\.sock$/);
-  assert.equal(socketPath(long, "/tmp"), fallback, "stable for the same data directory");
+  assert.equal(socketPath(long, "/tmp", "darwin"), fallback, "stable for the same data directory");
+  assert.equal(socketPath("D:\\pom\\home", "C:\\Temp", "win32"), undefined, "herdr's own default on Windows");
 });
 
 test("herdr panes start a non-login shell so the private PATH survives", () => {
