@@ -1,0 +1,24 @@
+{
+  "schema": "pom-plugin-ui/v1",
+  "plugin_code": "pi_harness",
+  "menu": [
+    {
+      "id": "terminal",
+      "label": { "en": "Pi Harness", "pt-BR": "Pi Harness" },
+      "icon": "terminal",
+      "to": "/terminal",
+      "roles": ["admin"]
+    }
+  ],
+  "routes": [
+    { "path": "/terminal", "screen": "terminal", "full_bleed": true, "roles": ["admin"] }
+  ],
+  "screens": {
+    "terminal": { "module": "ui/screens.js", "export": "terminal", "styles": ["ui/plugin.css"] }
+  },
+  "i18n": {
+    "en": "i18n/en.json",
+    "pt-BR": "i18n/pt-BR.json"
+  },
+  "assets": ["ui/screens.js", "ui/plugin.css", "ui/runtime.json", "i18n/en.json", "i18n/pt-BR.json"]
+}

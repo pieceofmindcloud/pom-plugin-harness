@@ -1,0 +1,9 @@
+{
+  "starting": "Starting herdr and pi…",
+  "startingDetail": "The first start unpacks the bundled runtime and can take a minute.",
+  "connecting": "Connecting to the terminal…",
+  "failed": "The terminal could not start",
+  "disconnected": "Terminal disconnected. The agent keeps running in herdr.",
+  "reconnect": "Reconnect",
+  "retry": "Try again"
+}

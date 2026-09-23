@@ -1,0 +1,9 @@
+{
+  "starting": "Iniciando o herdr e o pi…",
+  "startingDetail": "A primeira inicialização descompacta o runtime embutido e pode levar um minuto.",
+  "connecting": "Conectando ao terminal…",
+  "failed": "Não foi possível iniciar o terminal",
+  "disconnected": "Terminal desconectado. O agente continua rodando no herdr.",
+  "reconnect": "Reconectar",
+  "retry": "Tentar de novo"
+}
