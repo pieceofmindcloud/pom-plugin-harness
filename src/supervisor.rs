@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-const PLUGIN_DIR: &str = "pi_harness";
+const PLUGIN_DIR: &str = "harness";
 
 /// What the POM hands to the plugin in `host.configure`.
 #[derive(Debug, Clone, PartialEq)]
@@ -171,9 +171,9 @@ impl Supervisor {
         let mut child = Command::new(&node)
             .arg(runtime.join("launcher.mjs"))
             .current_dir(&runtime)
-            .env("PI_POM_DATA_DIR", base.join("data"))
-            .env("PI_POM_LLM_BASE_URL", &gateway.openai_base_url)
-            .env("PI_POM_LLM_API_KEY", &gateway.api_key)
+            .env("HARNESS_POM_DATA_DIR", base.join("data"))
+            .env("HARNESS_POM_LLM_BASE_URL", &gateway.openai_base_url)
+            .env("HARNESS_POM_LLM_API_KEY", &gateway.api_key)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -272,7 +272,7 @@ impl Supervisor {
     }
 }
 
-/// `<dir of POM_PLUGIN_DB>/pi_harness`, the data home the POM gives this plugin.
+/// `<dir of POM_PLUGIN_DB>/harness`, the data home the POM gives this plugin.
 fn plugin_directory() -> Result<PathBuf, String> {
     let parent = std::env::var_os("POM_PLUGIN_DB")
         .map(PathBuf::from)
@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn runtime_unpacks_once_per_checksum_and_replaces_older_ones() {
-        let root = std::env::temp_dir().join(format!("pi-unpack-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("harness-unpack-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let first = archive_with(&[("launcher.mjs", b"// one")]);
         let path = unpack_runtime(&root, &first, &"a".repeat(64)).unwrap();

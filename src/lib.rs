@@ -227,7 +227,7 @@ static API: PluginApiV1 = PluginApiV1 {
 /// The returned table is static; the host must call its functions only as the
 /// v1 plugin ABI specifies.
 #[no_mangle]
-pub unsafe extern "C" fn pom_pi_harness_plugin_v1() -> *const PluginApiV1 {
+pub unsafe extern "C" fn pom_harness_plugin_v1() -> *const PluginApiV1 {
     &API
 }
 
@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn entry_exposes_the_generic_v1_boundary() {
-        let api = unsafe { &*pom_pi_harness_plugin_v1() };
+        let api = unsafe { &*pom_harness_plugin_v1() };
         assert_eq!(api.abi_version, ABI_VERSION);
         assert_eq!(api.capabilities, 0);
         assert!(api.create.is_some());

@@ -51,9 +51,9 @@ else
 fi
 
 if [[ "$extension" == dll ]]; then
-  artifact="${artifact_dir}/pom_plugin_pi_harness.dll"
+  artifact="${artifact_dir}/pom_plugin_harness.dll"
 else
-  artifact="${artifact_dir}/libpom_plugin_pi_harness.${extension}"
+  artifact="${artifact_dir}/libpom_plugin_harness.${extension}"
 fi
 
 "$root/scripts/build-ui.sh"
@@ -64,12 +64,12 @@ herdr_resolved="$(printf '%s\n' "$runtime_output" | sed -n 's/^herdr_version=//p
 [[ -f "$runtime_archive" ]] || die 'harness runtime archive was not produced'
 (
   cd "$root"
-  PI_RUNTIME_ARCHIVE="$runtime_archive" cargo "${cargo_args[@]}"
+  HARNESS_RUNTIME_ARCHIVE="$runtime_archive" cargo "${cargo_args[@]}"
 )
 [[ -f "$artifact" ]] || die "artifact not found: $artifact"
 
 mkdir -p "$output"
-destination="${output}/pom-plugin-pi-harness-${platform}.${extension}"
+destination="${output}/pom-plugin-harness-${platform}.${extension}"
 cp "$artifact" "$destination"
 if command -v shasum >/dev/null 2>&1; then
   sha256="$(shasum -a 256 "$destination" | awk '{print $1}')"

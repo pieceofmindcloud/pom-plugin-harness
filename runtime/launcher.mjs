@@ -2,7 +2,7 @@
 //
 // The plugin library starts this script with the Node runtime shipped next to
 // it, passing the model endpoint and API key the POM handed over
-// (`PI_POM_LLM_BASE_URL`, `PI_POM_LLM_API_KEY`). It:
+// (`HARNESS_POM_LLM_BASE_URL`, `HARNESS_POM_LLM_API_KEY`). It:
 //
 // - runs every herdr and pi process with a private, explicit environment:
 //   `HOME` under the plugin data directory and no inherited `HERDR_*`
@@ -22,36 +22,58 @@
 
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, unwatchFile, watchFile, writeFileSync } from "node:fs";
 import http from "node:http";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path, { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  AGENTS,
+  configureAgents,
+  detectHostAgents,
+  fccPort,
+  installAgents,
+  normalizeChoice,
+  parsePomModels,
+  preferredModel,
+  superviseFcc,
+  trustHerdrCodexHooks,
+  withOutputCeiling,
+} from "./agents.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(join(here, "app", "package.json"));
 const env = process.env;
 const isWindows = process.platform === "win32";
-const dataDir = env.PI_POM_DATA_DIR || join(here, "data");
+const dataDir = env.HARNESS_POM_DATA_DIR || join(here, "data");
 const home = join(dataDir, "home");
 const workspace = join(dataDir, "workspace");
 const binDir = join(dataDir, "bin");
-const llmBaseUrl = (env.PI_POM_LLM_BASE_URL || "").replace(/\/+$/, "");
-const llmApiKey = env.PI_POM_LLM_API_KEY || "";
+const llmBaseUrl = (env.HARNESS_POM_LLM_BASE_URL || "").replace(/\/+$/, "");
+const llmApiKey = env.HARNESS_POM_LLM_API_KEY || "";
 const herdrBin = join(here, "bin", isWindows ? "herdr.exe" : "herdr");
 const nodeBin = process.execPath;
 const piCli = join(here, "app", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "bundle", "cli.js");
 const TOKEN_HEADER = "x-pom-plugin-token";
-const MODEL_POLL_MS = Number(env.PI_POM_MODEL_POLL_MS || 15_000);
+const MODEL_POLL_MS = Number(env.HARNESS_POM_MODEL_POLL_MS || 15_000);
 const PROVIDER = "pom";
 const token = randomBytes(32).toString("base64url");
+// FCC reaches the POM through the launcher at this secret path (it has no key setting).
+const relaySecret = randomBytes(24).toString("base64url");
+const agentsManifestPath = join(here, "agents.json");
+const npmCli = join(here, "npm", "bin", "npm-cli.js");
+// The POM models with their limits, for the agent shim (`agent-shim.mjs`).
+const pomModelsPath = join(dataDir, "pom-models.json");
 
 let server;
 let reported = false;
+let stopAgents = () => {};
+// The POM models as last listed, with their limits.
+let currentModels = [];
 
 function log(message) {
-  process.stderr.write(`pi-pom: ${message}\n`);
+  process.stderr.write(`harness: ${message}\n`);
 }
 
 function report(value) {
@@ -68,6 +90,7 @@ function fail(error) {
 }
 
 function shutdown(code = 0) {
+  stopAgents();
   if (server && server.exitCode === null) server.kill("SIGTERM");
   setTimeout(() => process.exit(code), 300).unref();
 }
@@ -84,7 +107,7 @@ export function socketPath(homeDir, tempDir = tmpdir(), platform = process.platf
   const preferred = path.posix.join(homeDir, "herdr.sock");
   if (Buffer.byteLength(preferred) <= 90) return preferred;
   const id = createHash("sha256").update(homeDir).digest("hex").slice(0, 16);
-  return path.posix.join(tempDir, `pom-pi-${id}`, "herdr.sock");
+  return path.posix.join(tempDir, `pom-harness-${id}`, "herdr.sock");
 }
 
 /**
@@ -121,6 +144,8 @@ export function privateEnv(options) {
     result.LOCALAPPDATA = paths.join(options.home, "AppData", "Local");
   } else {
     result.SHELL = options.shell;
+    // macOS bash otherwise greets every new pane with its zsh migration notice.
+    result.BASH_SILENCE_DEPRECATION_WARNING = "1";
   }
   if (options.socket) result.HERDR_SOCKET_PATH = options.socket;
   return result;
@@ -148,7 +173,7 @@ function writePiWrapper() {
  * up the workspace), and a non-login shell keeps the private PATH in panes.
  */
 export function herdrConfig(shell) {
-  const lines = ["# Written by the POM pi harness plugin when missing; edit freely.", "onboarding = false", "", "[terminal]"];
+  const lines = ["# Written by the POM harness plugin when missing; edit freely.", "onboarding = false", "", "[terminal]"];
   if (shell) lines.push(`default_shell = ${JSON.stringify(shell)}`);
   lines.push('shell_mode = "non_login"', "");
   return lines.join("\n");
@@ -182,11 +207,7 @@ async function listPomModels() {
   const headers = { accept: "application/json", authorization: `Bearer ${llmApiKey}` };
   const response = await fetch(`${llmBaseUrl}/models`, { headers, signal: AbortSignal.timeout(10_000) });
   if (!response.ok) throw new Error(`GET ${llmBaseUrl}/models returned HTTP ${response.status}`);
-  const body = await response.json();
-  const rows = Array.isArray(body?.data) ? body.data : [];
-  return rows
-    .map((row) => (typeof row?.id === "string" ? row.id.trim() : ""))
-    .filter((id, index, ids) => id && ids.indexOf(id) === index);
+  return parsePomModels(await response.json());
 }
 
 function readJson(path, fallback) {
@@ -203,15 +224,20 @@ function readJson(path, fallback) {
  * Other providers the user added are kept. pi rereads the file whenever
  * `/model` opens, so a new POM deployment shows up without a restart.
  */
-export function withPomProvider(current, baseUrl, modelIds) {
+export function withPomProvider(current, baseUrl, models) {
   const providers = { ...(current?.providers ?? {}) };
-  if (modelIds.length === 0) delete providers[PROVIDER];
+  if (models.length === 0) delete providers[PROVIDER];
   else {
     providers[PROVIDER] = {
       baseUrl,
       api: "openai-completions",
       apiKey: "$POM_API_KEY",
-      models: modelIds.map((id) => ({ id })),
+      // The POM's limits per model; without them pi assumes 128000 and 16384.
+      models: models.map(({ id, contextWindow, maxTokens }) => ({
+        id,
+        ...(contextWindow && { contextWindow }),
+        ...(maxTokens && { maxTokens }),
+      })),
     };
   }
   return { ...(current ?? {}), providers };
@@ -227,17 +253,18 @@ export function withDefaultModel(settings, modelIds) {
   const unset = !settings?.defaultProvider && !settings?.defaultModel;
   const stale = settings?.defaultProvider === PROVIDER && !modelIds.includes(settings?.defaultModel);
   if (!unset && !stale) return undefined;
-  return { ...(settings ?? {}), defaultProvider: PROVIDER, defaultModel: modelIds[0] };
+  return { ...(settings ?? {}), defaultProvider: PROVIDER, defaultModel: preferredModel(modelIds) };
 }
 
-function writePiConfig(modelIds) {
+function writePiConfig(models) {
+  const modelIds = models.map((model) => model.id);
   const agentDir = join(home, ".pi", "agent");
   mkdirSync(agentDir, { recursive: true });
   const modelsPath = join(agentDir, "models.json");
-  const models = `${JSON.stringify(withPomProvider(readJson(modelsPath, {}), llmBaseUrl, modelIds), null, 2)}\n`;
+  const text = `${JSON.stringify(withPomProvider(readJson(modelsPath, {}), llmBaseUrl, models), null, 2)}\n`;
   let changed = false;
-  if (readFileSafe(modelsPath) !== models) {
-    writeFileSync(modelsPath, models);
+  if (readFileSafe(modelsPath) !== text) {
+    writeFileSync(modelsPath, text);
     changed = true;
   }
   const settingsPath = join(agentDir, "settings.json");
@@ -257,20 +284,33 @@ function readFileSafe(path) {
   }
 }
 
-function followPomModels(initial) {
+/** The POM models for the agent shim, which runs later in a herdr pane. */
+function writePomModels(models) {
+  currentModels = models;
+  writeFileSync(pomModelsPath, `${JSON.stringify(models, null, 2)}\n`);
+}
+
+function describeModels(models) {
+  return models.map(({ id, contextWindow, maxTokens }) => `${id} (context ${contextWindow ?? "?"}, output ${maxTokens ?? "?"})`).join(", ");
+}
+
+function followPomModels(initial, onChange) {
+  // Limits count as a change too: a deployment publishes them once its capacity is confirmed.
   let known = JSON.stringify(initial);
   const timer = setInterval(async () => {
-    let modelIds;
+    let models;
     try {
-      modelIds = await listPomModels();
+      models = await listPomModels();
     } catch (error) {
       log(`POM models unavailable: ${error.message}`);
       return;
     }
-    const ids = JSON.stringify(modelIds);
-    if (ids === known) return;
-    known = ids;
-    if (writePiConfig(modelIds)) log(`POM models changed: ${ids}`);
+    const current = JSON.stringify(models);
+    if (current === known) return;
+    known = current;
+    writePomModels(models);
+    if (writePiConfig(models)) log(`POM models changed: ${describeModels(models)}`);
+    onChange(models);
   }, MODEL_POLL_MS);
   timer.unref();
 }
@@ -368,11 +408,71 @@ export function parseClientMessage(data, isBinary) {
   return { type: "input", data: text };
 }
 
+/**
+ * FCC's `llamacpp` provider sends a fixed placeholder key, so it reaches the
+ * POM through this loopback relay at a per-launch secret path, which swaps in
+ * the POM key. Paths below `<secret>/v1` map onto the POM `/v1`.
+ */
+export function relayTarget(rawUrl, secret, baseUrl) {
+  const prefix = `/relay/${secret}/v1`;
+  if (!rawUrl.startsWith(prefix)) return undefined;
+  return `${baseUrl}${rawUrl.slice(prefix.length)}`;
+}
+
+function relayToPom(request, response) {
+  const target = relayTarget(request.url, relaySecret, llmBaseUrl);
+  if (!target) {
+    response.writeHead(404).end();
+    return;
+  }
+  const url = new URL(target);
+  const headers = { ...request.headers, host: url.host, authorization: `Bearer ${llmApiKey}` };
+  delete headers["x-api-key"];
+  if (request.method === "POST" && url.pathname.endsWith("/chat/completions")) {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("end", () => {
+      let body = Buffer.concat(chunks);
+      try {
+        const patched = withOutputCeiling(JSON.parse(body.toString("utf8")), currentModels);
+        if (patched) body = Buffer.from(JSON.stringify(patched));
+      } catch {
+        // Not JSON: the POM answers it as it is.
+      }
+      delete headers["transfer-encoding"];
+      headers["content-length"] = String(body.length);
+      forwardToPom(request, response, url, headers).end(body);
+    });
+    return;
+  }
+  request.pipe(forwardToPom(request, response, url, headers));
+}
+
+function forwardToPom(request, response, url, headers) {
+  const outbound = http.request(
+    { host: url.hostname, port: url.port || 80, method: request.method, path: `${url.pathname}${url.search}`, headers },
+    (reply) => {
+      response.writeHead(reply.statusCode, reply.headers);
+      reply.pipe(response);
+    },
+  );
+  outbound.on("error", (error) => {
+    log(`relay ${request.method} ${url.pathname}: ${error.message}`);
+    if (!response.headersSent) response.writeHead(502);
+    response.end();
+  });
+  return outbound;
+}
+
 function startTerminalServer(runEnv) {
   const pty = require("node-pty");
   const { WebSocketServer } = require("ws");
   const sockets = new WebSocketServer({ noServer: true });
   const httpServer = http.createServer((request, response) => {
+    if (request.url.startsWith(`/relay/${relaySecret}/`)) {
+      relayToPom(request, response);
+      return;
+    }
     if (!tokenMatches(request.headers[TOKEN_HEADER])) {
       response.writeHead(401, { "content-type": "text/plain" }).end("missing or invalid plugin token");
       return;
@@ -414,10 +514,183 @@ function startTerminalServer(runEnv) {
   });
 }
 
+// --- Other agents (chosen on first use) --------------------------------------
+
+const agentsDetectedPath = join(dataDir, "agents-detected.json");
+const agentsChoicePath = join(dataDir, "agents-choice.json");
+const agentsStatusPath = join(dataDir, "agents-status.json");
+
+async function pomWorkspace(runEnv) {
+  const listed = await herdrJson(runEnv, ["workspace", "list"]);
+  return (listed.workspaces ?? []).find((entry) => entry.label === "POM") ?? listed.workspaces?.[0];
+}
+
+/** pi's tab carries herdr's numbered default label until it is named like the agent tabs. */
+async function namePiTab(runEnv) {
+  const pom = await pomWorkspace(runEnv);
+  if (!pom) return;
+  const tabs = await herdrJson(runEnv, ["tab", "list"]);
+  const piTab = (tabs.tabs ?? []).find((entry) => entry.workspace_id === pom.workspace_id && entry.number === 1);
+  if (piTab?.label === "1") await herdrJson(runEnv, ["tab", "rename", piTab.tab_id, "pi"]);
+}
+
+/** One tab per chosen agent in the POM workspace, each opened once; herdr restores them afterwards. */
+async function openAgentTabs(runEnv, kinds) {
+  const statePath = join(dataDir, "agents-tabs.json");
+  const opened = new Set(readJson(statePath, {}).opened ?? []);
+  const missing = AGENTS.filter((agent) => kinds.includes(agent.kind) && !opened.has(agent.kind));
+  if (missing.length === 0) return;
+  const pom = await pomWorkspace(runEnv);
+  if (!pom) return;
+  for (const agent of missing) {
+    const tab = await herdrJson(runEnv, [
+      "tab", "create", "--workspace", pom.workspace_id, "--cwd", workspace, "--label", agent.label, "--no-focus",
+    ]);
+    await herdrJson(runEnv, [
+      "agent", "start", agent.kind, "--kind", agent.kind, "--pane", tab.root_pane.pane_id, "--timeout", "60000",
+    ]).catch((error) => log(error.message));
+    opened.add(agent.kind);
+    writeFileSync(statePath, `${JSON.stringify({ opened: [...opened] })}\n`);
+  }
+}
+
+/** The "Setup" tab running `pom-agents`, focused so it is the first thing the user sees. */
+async function openSetupTab(runEnv) {
+  const pom = await pomWorkspace(runEnv);
+  if (!pom) return undefined;
+  const tab = await herdrJson(runEnv, ["tab", "create", "--workspace", pom.workspace_id, "--cwd", workspace, "--label", "Setup", "--focus"]);
+  await herdr(runEnv, ["pane", "run", tab.root_pane.pane_id, "pom-agents"]);
+  return tab.root_pane.tab_id;
+}
+
+/** `pom-agents` on the panes' PATH opens the agent chooser (`agent-setup.mjs`). */
+function writeSetupCommand() {
+  const setup = join(here, "agent-setup.mjs");
+  if (isWindows) {
+    writeFileSync(join(binDir, "pom-agents.cmd"), `@"${nodeBin}" "${setup}" "${dataDir}" %*\r\n`);
+    return;
+  }
+  const path = join(binDir, "pom-agents");
+  writeFileSync(path, `#!/bin/sh\nexec "${nodeBin}" "${setup}" "${dataDir}" "$@"\n`);
+  chmodSync(path, 0o755);
+}
+
+function writeAgentsStatus(savedAt, state, message) {
+  writeFileSync(agentsStatusPath, `${JSON.stringify({ savedAt, state, message })}\n`);
+}
+
+/**
+ * Claude Code, Codex and opencode next to pi, as the user chooses them. The
+ * first time, a "Setup" tab asks (everything checked; agents already on this
+ * machine are used from there). Each saved choice is then installed, wired to
+ * the POM and opened in its own tab; `pom-agents` changes it later.
+ */
+async function startAgents(runEnv, terminalPort, models) {
+  const manifest = readJson(agentsManifestPath, undefined);
+  if (!manifest) {
+    log("no agents manifest in this build; only pi is available");
+    return undefined;
+  }
+  const detected = await detectHostAgents({
+    platform: process.platform,
+    home: homedir(),
+    pathEnv: env.PATH,
+    nodeBin,
+    exclude: [dataDir, here],
+  });
+  const found = Object.entries(detected).map(([kind, host]) => `${kind} ${host.version} (${host.path})`);
+  log(found.length > 0 ? `already on this machine: ${found.join(", ")}` : "no agent installed on this machine");
+  writeFileSync(agentsDetectedPath, `${JSON.stringify({ detected, versions: manifest.npm, home: homedir() }, null, 2)}\n`);
+  writeSetupCommand();
+
+  const context = {
+    home,
+    workspace: realpathSync(workspace),
+    llmBaseUrl,
+    relayUrl: `http://127.0.0.1:${terminalPort}/relay/${relaySecret}/v1`,
+    fccPort: await fccPort(home),
+    token: randomBytes(32).toString("base64url"),
+  };
+  let latestModels = models;
+  let fcc;
+  let setupTab;
+  let applied;
+  let queue = Promise.resolve();
+
+  const apply = async () => {
+    const saved = readJson(agentsChoicePath, undefined);
+    if (!saved || saved.savedAt === applied) return;
+    applied = saved.savedAt;
+    const choice = normalizeChoice(saved, detected);
+    const kinds = AGENTS.filter((agent) => choice.agents[agent.kind].enabled).map((agent) => agent.kind);
+    try {
+      writeAgentsStatus(saved.savedAt, "installing", "Installing (the first time takes about a minute)...");
+      const { fccBin, exe } = await installAgents({
+        manifest,
+        choice,
+        dataDir,
+        runEnv,
+        nodeBin,
+        npmCli,
+        binDir,
+        shim: join(here, "agent-shim.mjs"),
+        modelsPath: pomModelsPath,
+        windows: isWindows,
+        log: (message) => {
+          log(message);
+          writeAgentsStatus(saved.savedAt, "installing", `${message[0].toUpperCase()}${message.slice(1)}...`);
+        },
+      });
+      configureAgents({ ...context, models: latestModels });
+      for (const kind of kinds) {
+        await herdr(runEnv, ["integration", "install", kind]).catch((error) => log(error.message));
+      }
+      // Codex asks to review new hooks on start; herdr's state hook is ours.
+      trustHerdrCodexHooks(home);
+      if (fccBin && !fcc) fcc = superviseFcc({ fccBin, exe, runEnv, home, log });
+      if (!fccBin && fcc) {
+        fcc.stop();
+        fcc = undefined;
+      }
+      writeAgentsStatus(saved.savedAt, "installing", "Opening a tab for each agent...");
+      await openAgentTabs(runEnv, kinds);
+      const labels = AGENTS.filter((agent) => kinds.includes(agent.kind)).map((agent) => agent.label);
+      log(labels.length > 0 ? `${labels.join(", ")} ready${fcc ? ` (FCC on 127.0.0.1:${context.fccPort})` : ""}` : "only pi chosen");
+      writeAgentsStatus(saved.savedAt, "ready", labels.length > 0 ? `Ready: ${labels.join(", ")}.` : "Done.");
+      if (setupTab) {
+        await herdr(runEnv, ["tab", "close", setupTab]).catch((error) => log(error.message));
+        setupTab = undefined;
+      }
+    } catch (error) {
+      log(`agents unavailable: ${error.message}`);
+      writeAgentsStatus(saved.savedAt, "error", `Could not set up the agents: ${error.message}`);
+    }
+  };
+  const schedule = () => {
+    queue = queue.then(apply);
+  };
+  watchFile(agentsChoicePath, { interval: 1000 }, schedule);
+  if (existsSync(agentsChoicePath)) schedule();
+  else setupTab = await openSetupTab(runEnv).catch((error) => log(`agent setup tab: ${error.message}`));
+
+  return {
+    modelsChanged(nextModels) {
+      latestModels = nextModels;
+      queue = queue.then(() => {
+        if (configureAgents({ ...context, models: nextModels })) fcc?.restart();
+      });
+    },
+    stop() {
+      unwatchFile(agentsChoicePath);
+      fcc?.stop();
+    },
+  };
+}
+
 // --- Main -------------------------------------------------------------------
 
 async function main() {
-  if (!llmBaseUrl || !llmApiKey) throw new Error("the POM did not provide PI_POM_LLM_BASE_URL and PI_POM_LLM_API_KEY");
+  if (!llmBaseUrl || !llmApiKey) throw new Error("the POM did not provide HARNESS_POM_LLM_BASE_URL and HARNESS_POM_LLM_API_KEY");
   for (const directory of [dataDir, home, workspace]) mkdirSync(directory, { recursive: true });
   const socket = socketPath(home);
   if (socket) mkdirSync(dirname(socket), { recursive: true, mode: 0o700 });
@@ -428,16 +701,18 @@ async function main() {
   writeHerdrConfig(runEnv.HERDR_CONFIG_PATH, shell);
   writePiTrust();
 
-  let modelIds = [];
+  let models = [];
   let warning;
   try {
-    modelIds = await listPomModels();
-    if (modelIds.length === 0) warning = `${llmBaseUrl}/models listed no models yet`;
+    models = await listPomModels();
+    if (models.length === 0) warning = `${llmBaseUrl}/models listed no models yet`;
   } catch (error) {
     warning = `POM models unavailable: ${error.message}`;
   }
   if (warning) log(warning);
-  writePiConfig(modelIds);
+  writePomModels(models);
+  writePiConfig(models);
+  if (models.length > 0) log(`POM models: ${describeModels(models)}`);
 
   // herdr's pi integration reports exact agent state (working, blocked, idle);
   // it installs into pi's private agent directory and is idempotent.
@@ -448,10 +723,18 @@ async function main() {
     warning = [warning, error.message].filter(Boolean).join("; ");
     log(error.message);
   });
+  await namePiTab(runEnv).catch((error) => log(error.message));
   const port = await startTerminalServer(runEnv);
-  followPomModels(modelIds);
-  log(`terminal on 127.0.0.1:${port}; herdr socket ${socket ?? "default"}; ${modelIds.length} POM model(s)`);
-  report({ status: "ready", port, token, models: modelIds, warning });
+  let agents;
+  startAgents(runEnv, port, models)
+    .then((started) => {
+      agents = started;
+      stopAgents = () => started?.stop();
+    })
+    .catch((error) => log(`other agents unavailable: ${error.message}`));
+  followPomModels(models, (next) => agents?.modelsChanged(next));
+  log(`terminal on 127.0.0.1:${port}; herdr socket ${socket ?? "default"}; ${models.length} POM model(s)`);
+  report({ status: "ready", port, token, models: models.map((model) => model.id), warning });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

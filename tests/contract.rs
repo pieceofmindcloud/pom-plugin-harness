@@ -19,12 +19,12 @@ fn json(path: &str) -> Value {
 fn manifest_registers_one_admin_only_full_bleed_terminal() {
     let manifest = json("ui/manifest.json");
     assert_eq!(manifest["schema"], "pom-plugin-ui/v1");
-    assert_eq!(manifest["plugin_code"], "pi_harness");
+    assert_eq!(manifest["plugin_code"], "harness");
 
     let menu = manifest["menu"].as_array().expect("menu array");
     assert_eq!(menu.len(), 1);
     assert_eq!(menu[0]["to"], "/terminal");
-    assert_eq!(menu[0]["label"]["en"], "Pi Harness");
+    assert_eq!(menu[0]["label"]["en"], "Harness");
     assert_eq!(menu[0]["roles"], serde_json::json!(["admin"]));
     // One of the names the POM resolves; anything else falls back to a generic icon.
     assert_eq!(menu[0]["icon"], "terminal");
@@ -96,5 +96,5 @@ fn launcher_never_inherits_the_host_herdr_session() {
     assert!(!launcher.contains("...env"));
     assert!(!launcher.contains("...process.env"));
     assert!(text("scripts/fetch-runtime.sh").contains("runtime/launcher.mjs"));
-    assert!(text("src/supervisor.rs").contains("\"PI_POM_LLM_BASE_URL\""));
+    assert!(text("src/supervisor.rs").contains("\"HARNESS_POM_LLM_BASE_URL\""));
 }

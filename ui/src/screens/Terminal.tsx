@@ -60,6 +60,8 @@ export function Terminal() {
 
         const term = new XTerm({
           cursorBlink: true,
+          // herdr owns the right click (its pane and sidebar menus); xterm must not select a word.
+          rightClickSelectsWord: false,
           fontFamily: '"JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
           fontSize: 13,
           scrollback: 5000,
@@ -71,6 +73,11 @@ export function Terminal() {
         term.open(element);
         fit.fit();
         cleanup.push(() => term.dispose());
+        // xterm forwards the right click to herdr as a mouse event; keep the
+        // browser's own context menu from opening over the terminal.
+        const suppressMenu = (event: MouseEvent) => event.preventDefault();
+        element.addEventListener("contextmenu", suppressMenu);
+        cleanup.push(() => element.removeEventListener("contextmenu", suppressMenu));
 
         const socket = new WebSocket(terminalUrl(term.cols, term.rows));
         socket.binaryType = "arraybuffer";

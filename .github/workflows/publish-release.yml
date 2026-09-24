@@ -104,8 +104,8 @@ jobs:
         with:
           name: plugin-${{ matrix.name }}
           path: |
-            dist-release/pom-plugin-pi-harness-${{ matrix.platform }}.${{ matrix.ext }}
-            dist-release/pom-plugin-pi-harness-${{ matrix.platform }}.metadata.json
+            dist-release/pom-plugin-harness-${{ matrix.platform }}.${{ matrix.ext }}
+            dist-release/pom-plugin-harness-${{ matrix.platform }}.metadata.json
           if-no-files-found: error
 
   release:
@@ -146,7 +146,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist-release
-          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir dist-release --pattern "pom-plugin-pi-harness-${PLATFORM}.*"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir dist-release --pattern "pom-plugin-harness-${PLATFORM}.*"
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ matrix.version }}
@@ -157,7 +157,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ matrix.version }}
           PLATFORM: ${{ matrix.platform }}
-          ARTIFACT: dist-release/pom-plugin-pi-harness-${{ matrix.platform }}.${{ matrix.ext }}
-          METADATA: dist-release/pom-plugin-pi-harness-${{ matrix.platform }}.metadata.json
+          ARTIFACT: dist-release/pom-plugin-harness-${{ matrix.platform }}.${{ matrix.ext }}
+          METADATA: dist-release/pom-plugin-harness-${{ matrix.platform }}.metadata.json
           POM_RELEASE_TOKEN: ${{ secrets.POM_RELEASE_TOKEN }}
           POM_RELEASE_API: ${{ secrets.POM_RELEASE_API }}

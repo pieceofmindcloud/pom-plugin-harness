@@ -1,10 +1,10 @@
 {
   "schema": "pom-plugin-ui/v1",
-  "plugin_code": "pi_harness",
+  "plugin_code": "harness",
   "menu": [
     {
       "id": "terminal",
-      "label": { "en": "Pi Harness", "pt-BR": "Pi Harness" },
+      "label": { "en": "Harness", "pt-BR": "Harness" },
       "icon": "terminal",
       "to": "/terminal",
       "roles": ["admin"]

@@ -95,7 +95,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pom-plugin-pi-harness"
+name = "pom-plugin-harness"
 version = "0.1.0"
 dependencies = [
  "flate2",

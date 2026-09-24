@@ -24,24 +24,25 @@ test("herdr and pi get a private environment, never the host's herdr session", (
   const result = privateEnv({
     platform: "linux",
     base,
-    home: "/data/pi_harness/data/home",
-    binDir: "/data/pi_harness/data/bin",
-    herdrBin: "/data/pi_harness/runtime/abc/bin/herdr",
+    home: "/data/harness/data/home",
+    binDir: "/data/harness/data/bin",
+    herdrBin: "/data/harness/runtime/abc/bin/herdr",
     shell: "/bin/bash",
     apiKey: "sk-pom",
-    socket: "/data/pi_harness/data/home/herdr.sock",
+    socket: "/data/harness/data/home/herdr.sock",
   });
-  assert.equal(result.HOME, "/data/pi_harness/data/home");
-  assert.equal(result.HERDR_SOCKET_PATH, "/data/pi_harness/data/home/herdr.sock");
+  assert.equal(result.HOME, "/data/harness/data/home");
+  assert.equal(result.HERDR_SOCKET_PATH, "/data/harness/data/home/herdr.sock");
   assert.equal(result.HERDR_SESSION, undefined);
   assert.equal(result.HERDR_PANE_ID, undefined);
   assert.equal(result.OPENAI_API_KEY, undefined);
   assert.equal(result.POM_API_KEY, "sk-pom");
   assert.equal(result.LANG, "pt_BR.UTF-8");
-  assert.ok(result.PATH.startsWith("/data/pi_harness/data/bin:/data/pi_harness/runtime/abc/bin:"));
+  assert.ok(result.PATH.startsWith("/data/harness/data/bin:/data/harness/runtime/abc/bin:"));
   assert.ok(!result.PATH.includes("/opt/homebrew"));
-  assert.equal(result.HERDR_CONFIG_PATH, "/data/pi_harness/data/home/.config/herdr/config.toml");
+  assert.equal(result.HERDR_CONFIG_PATH, "/data/harness/data/home/.config/herdr/config.toml");
   assert.equal(result.SHELL, "/bin/bash");
+  assert.equal(result.BASH_SILENCE_DEPRECATION_WARNING, "1");
 });
 
 test("on Windows herdr's %APPDATA% and the system PATH stay private too", () => {
@@ -53,21 +54,21 @@ test("on Windows herdr's %APPDATA% and the system PATH stay private too", () => 
       APPDATA: "C:\\Users\\someone\\AppData\\Roaming",
       HERDR_SESSION: "fleet",
     },
-    home: "D:\\pom\\pi_harness\\data\\home",
-    binDir: "D:\\pom\\pi_harness\\data\\bin",
-    herdrBin: "D:\\pom\\pi_harness\\runtime\\abc\\bin\\herdr.exe",
+    home: "D:\\pom\\harness\\data\\home",
+    binDir: "D:\\pom\\harness\\data\\bin",
+    herdrBin: "D:\\pom\\harness\\runtime\\abc\\bin\\herdr.exe",
     shell: "",
     apiKey: "sk-pom",
   });
-  assert.equal(result.APPDATA, "D:\\pom\\pi_harness\\data\\home\\AppData\\Roaming");
-  assert.equal(result.LOCALAPPDATA, "D:\\pom\\pi_harness\\data\\home\\AppData\\Local");
+  assert.equal(result.APPDATA, "D:\\pom\\harness\\data\\home\\AppData\\Roaming");
+  assert.equal(result.LOCALAPPDATA, "D:\\pom\\harness\\data\\home\\AppData\\Local");
   assert.equal(
     result.HERDR_CONFIG_PATH,
-    "D:\\pom\\pi_harness\\data\\home\\AppData\\Roaming\\herdr\\config.toml",
+    "D:\\pom\\harness\\data\\home\\AppData\\Roaming\\herdr\\config.toml",
   );
   assert.equal(
     result.PATH,
-    "D:\\pom\\pi_harness\\data\\bin;D:\\pom\\pi_harness\\runtime\\abc\\bin;C:\\Windows\\System32;C:\\Windows;C:\\Windows\\System32\\WindowsPowerShell\\v1.0",
+    "D:\\pom\\harness\\data\\bin;D:\\pom\\harness\\runtime\\abc\\bin;C:\\Windows\\System32;C:\\Windows;C:\\Windows\\System32\\WindowsPowerShell\\v1.0",
   );
   assert.equal(result.HERDR_SESSION, undefined);
   assert.equal(result.HERDR_SOCKET_PATH, undefined);
@@ -75,10 +76,10 @@ test("on Windows herdr's %APPDATA% and the system PATH stay private too", () => 
 });
 
 test("the herdr socket path stays short enough for a Unix socket", () => {
-  assert.equal(socketPath("/data/pi_harness/data/home", "/tmp", "linux"), "/data/pi_harness/data/home/herdr.sock");
+  assert.equal(socketPath("/data/harness/data/home", "/tmp", "linux"), "/data/harness/data/home/herdr.sock");
   const long = `/Users/someone/Library/Application Support/pom/${"x".repeat(80)}/home`;
   const fallback = socketPath(long, "/tmp", "darwin");
-  assert.match(fallback, /^\/tmp\/pom-pi-[0-9a-f]{16}\/herdr\.sock$/);
+  assert.match(fallback, /^\/tmp\/pom-harness-[0-9a-f]{16}\/herdr\.sock$/);
   assert.equal(socketPath(long, "/tmp", "darwin"), fallback, "stable for the same data directory");
   assert.equal(socketPath("D:\\pom\\home", "C:\\Temp", "win32"), undefined, "herdr's own default on Windows");
 });
@@ -100,13 +101,14 @@ test("pi trusts the plugin's working folder once and keeps any saved decision", 
 
 test("pi's POM provider follows the node's models and keeps the user's providers", () => {
   const current = { providers: { ollama: { baseUrl: "http://localhost:11434/v1" } } };
-  const next = withPomProvider(current, "http://127.0.0.1:8080/v1", ["a", "b"]);
+  const models = [{ id: "a", contextWindow: 65536, maxTokens: 65536 }, { id: "b" }];
+  const next = withPomProvider(current, "http://127.0.0.1:8080/v1", models);
   assert.deepEqual(next.providers.ollama, current.providers.ollama);
   assert.deepEqual(next.providers.pom, {
     baseUrl: "http://127.0.0.1:8080/v1",
     api: "openai-completions",
     apiKey: "$POM_API_KEY",
-    models: [{ id: "a" }, { id: "b" }],
+    models: [{ id: "a", contextWindow: 65536, maxTokens: 65536 }, { id: "b" }],
   });
   assert.equal(withPomProvider(next, "http://127.0.0.1:8080/v1", []).providers.pom, undefined);
 });

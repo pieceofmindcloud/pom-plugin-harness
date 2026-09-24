@@ -48,7 +48,7 @@ target="$(printf '%s\n' "$build_output" | sed -n 's/^target=//p')"
 pi_resolved="$(printf '%s\n' "$build_output" | sed -n 's/^pi_version=//p')"
 herdr_resolved="$(printf '%s\n' "$build_output" | sed -n 's/^herdr_version=//p')"
 
-metadata="${output}/pom-plugin-pi-harness-${platform}.metadata.json"
+metadata="${output}/pom-plugin-harness-${platform}.metadata.json"
 cat > "$metadata" <<JSON
 {
   "plugin_code": "${plugin_code}",

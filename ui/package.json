@@ -1,5 +1,5 @@
 {
-  "name": "pom-plugin-pi-harness-ui",
+  "name": "pom-plugin-harness-ui",
   "private": true,
   "version": "0.1.0",
   "type": "module",

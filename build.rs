@@ -13,11 +13,11 @@ fn content_type(name: &str) -> &'static str {
 }
 
 /// The herdr + pi runtime archive from `scripts/fetch-runtime.sh`, named by
-/// `PI_RUNTIME_ARCHIVE`. Without it the library still builds, and the plugin
+/// `HARNESS_RUNTIME_ARCHIVE`. Without it the library still builds, and the plugin
 /// reports that no runtime is bundled.
 fn runtime_archive(generated: &mut String) {
-    println!("cargo:rerun-if-env-changed=PI_RUNTIME_ARCHIVE");
-    let archive = env::var("PI_RUNTIME_ARCHIVE")
+    println!("cargo:rerun-if-env-changed=HARNESS_RUNTIME_ARCHIVE");
+    let archive = env::var("HARNESS_RUNTIME_ARCHIVE")
         .ok()
         .filter(|value| !value.is_empty());
     let Some(archive) = archive else {
