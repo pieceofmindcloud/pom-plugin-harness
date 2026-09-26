@@ -2,7 +2,26 @@
   "schema": "pom-plugin-ui/v1",
   "plugin_code": "harness",
   "icon_image": "ui/icon.png",
-  "documentation": ["docs/README.md", "docs/guia-workspace.md", "docs/guia-desenvolvimento.md"],
+  "documentation": {
+    "guides": [
+      {
+        "id": "harness-overview",
+        "title": { "en": "Harness plugin documentation", "pt-BR": "Documentação do plugin Harness" },
+        "asset": "docs/README.md"
+      },
+      {
+        "id": "shared-workspace",
+        "title": { "en": "Shared workspace", "pt-BR": "Workspace compartilhado" },
+        "asset": "docs/guia-workspace.md"
+      },
+      {
+        "id": "development",
+        "title": { "en": "Development guide", "pt-BR": "Guia de desenvolvimento" },
+        "asset": "docs/guia-desenvolvimento.md"
+      }
+    ],
+    "reference": []
+  },
   "menu": [
     {
       "id": "terminal",

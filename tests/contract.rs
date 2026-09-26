@@ -23,11 +23,35 @@ fn manifest_registers_one_admin_only_full_bleed_terminal() {
     assert_eq!(manifest["icon_image"], "ui/icon.png");
     assert_eq!(
         manifest["documentation"],
-        serde_json::json!([
-            "docs/README.md",
-            "docs/guia-workspace.md",
-            "docs/guia-desenvolvimento.md"
-        ])
+        serde_json::json!({
+            "guides": [
+                {
+                    "id": "harness-overview",
+                    "title": {
+                        "en": "Harness plugin documentation",
+                        "pt-BR": "Documentação do plugin Harness"
+                    },
+                    "asset": "docs/README.md"
+                },
+                {
+                    "id": "shared-workspace",
+                    "title": {
+                        "en": "Shared workspace",
+                        "pt-BR": "Workspace compartilhado"
+                    },
+                    "asset": "docs/guia-workspace.md"
+                },
+                {
+                    "id": "development",
+                    "title": {
+                        "en": "Development guide",
+                        "pt-BR": "Guia de desenvolvimento"
+                    },
+                    "asset": "docs/guia-desenvolvimento.md"
+                }
+            ],
+            "reference": []
+        })
     );
 
     let menu = manifest["menu"].as_array().expect("menu array");
@@ -49,6 +73,23 @@ fn manifest_registers_one_admin_only_full_bleed_terminal() {
     assert_eq!(screen["module"], "ui/screens.js");
     assert_eq!(screen["export"], "terminal");
     assert!(text("ui/src/screens/index.tsx").contains("Terminal as terminal"));
+}
+
+#[test]
+fn published_flat_documentation_format_reproduces_the_pom_rejection() {
+    // The v0.0.3 release contained this exact list. The POM's PluginDocumentation
+    // has two Vec fields (guides and reference); serde sees a list as the struct's
+    // sequence form and rejects its first string where it expects the guides Vec.
+    let published_format = serde_json::json!([
+        "docs/README.md",
+        "docs/guia-workspace.md",
+        "docs/guia-desenvolvimento.md"
+    ]);
+    let error = serde_json::from_value::<(Vec<Value>, Vec<Value>)>(published_format).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid type: string \"docs/README.md\", expected a sequence"
+    );
 }
 
 #[test]
