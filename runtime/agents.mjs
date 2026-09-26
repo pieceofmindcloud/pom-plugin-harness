@@ -79,6 +79,16 @@ export function installPlan(manifest, choice) {
   return { npm, fcc };
 }
 
+/** Override VCS-derived package versions when building FCC from its ZIP archive. */
+export function fccSourceBuildEnv(commit) {
+  if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error("invalid free-claude-code commit");
+  const version = `0.0.0+g${commit.slice(0, 12)}`;
+  return {
+    SETUPTOOLS_SCM_PRETEND_VERSION: version,
+    SETUPTOOLS_SCM_PRETEND_VERSION_FOR_FREE_CLAUDE_CODE: version,
+  };
+}
+
 /**
  * The model new sessions should start on. The POM lists each deployment twice:
  * a stable name and a `name@d-<deployment>` alias that changes on every
@@ -592,6 +602,7 @@ export async function installAgents(context) {
           UV_CACHE_DIR: join(dataDir, "cache", "uv"),
           UV_PYTHON_PREFERENCE: "only-managed",
           UV_NO_MODIFY_PATH: "1",
+          ...fccSourceBuildEnv(manifest.fcc.commit),
         },
       });
     });
