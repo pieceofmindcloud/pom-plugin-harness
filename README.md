@@ -58,6 +58,12 @@ scripts/package.sh --platform macos-aarch64 --version 0.1.0 [--pi-version latest
 
 Build on the target platform: the npm install resolves native dependencies (`node-pty`, image tooling) for the machine it runs on. The packaged library is about 76 MB, and the unpacked runtime about 260 MB. On first start, pi downloads `fd` and `ripgrep` into its private agent directory, and the chosen agents are downloaded (FCC with its Python takes about 270 MB, plus each agent's npm package), so the node needs internet access once.
 
+## Shared workspace and plugin documentation
+
+The POM owns the shared project folder and may pass its path as the top-level `workspace_root` field in `host.configure`. Harness lists only immediate, non-hidden child directories through the authenticated plugin proxy at `GET /projects`; unavailable and empty roots produce explicit states. It does not choose or prompt for a workspace. The manifest registers an optional PNG menu image (`ui/icon.png`) while retaining the existing named menu icon as its fallback, and registers shipped Markdown guides under `documentation`.
+
+See [docs/README.md](docs/README.md) for the shipped guides.
+
 ## Releases
 
 `.github/workflows/publish-release.yml` is the manual release flow from `pom-plugin-base`, plus `pi_version` and `herdr_version` inputs. Each selected platform installs those official releases, builds, and publishes to GitHub and optionally to the license server. `ci.yml` runs the checks on every push and pull request.

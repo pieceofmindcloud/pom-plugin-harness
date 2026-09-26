@@ -22,7 +22,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, unwatchFile, watchFile, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, unwatchFile, watchFile, writeFileSync } from "node:fs";
 import http from "node:http";
 import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
@@ -52,6 +52,7 @@ const workspace = join(dataDir, "workspace");
 const binDir = join(dataDir, "bin");
 const llmBaseUrl = (env.HARNESS_POM_LLM_BASE_URL || "").replace(/\/+$/, "");
 const llmApiKey = env.HARNESS_POM_LLM_API_KEY || "";
+const workspaceRoot = env.HARNESS_POM_WORKSPACE_ROOT || "";
 const herdrBin = join(here, "bin", isWindows ? "herdr.exe" : "herdr");
 const nodeBin = process.execPath;
 const piCli = join(here, "app", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "bundle", "cli.js");
@@ -464,6 +465,19 @@ function forwardToPom(request, response, url, headers) {
   return outbound;
 }
 
+export function listWorkspaceProjects(root) {
+  if (!root) return { status: "unavailable", projects: [] };
+  try {
+    const projects = readdirSync(root, { withFileTypes: true })
+      .filter((entry) => !entry.name.startsWith(".") && entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort((a, b) => a.localeCompare(b));
+    return projects.length ? { status: "ready", projects } : { status: "empty", projects: [] };
+  } catch {
+    return { status: "unavailable", projects: [] };
+  }
+}
+
 function startTerminalServer(runEnv) {
   const pty = require("node-pty");
   const { WebSocketServer } = require("ws");
@@ -477,8 +491,13 @@ function startTerminalServer(runEnv) {
       response.writeHead(401, { "content-type": "text/plain" }).end("missing or invalid plugin token");
       return;
     }
-    if (new URL(request.url, "http://terminal.invalid").pathname === "/health") {
+    const pathname = new URL(request.url, "http://terminal.invalid").pathname;
+    if (pathname === "/health") {
       response.writeHead(200, { "content-type": "application/json" }).end('{"status":"ready"}');
+      return;
+    }
+    if (request.method === "GET" && pathname === "/projects") {
+      response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(listWorkspaceProjects(workspaceRoot)));
       return;
     }
     response.writeHead(404).end();
