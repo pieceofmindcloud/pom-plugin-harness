@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   claudeLimitsEnv,
+  fccSourceBuildEnv,
   hostAgentDirs,
   installPlan,
   normalizeChoice,
@@ -60,6 +61,15 @@ test("FCC is installed only for Claude Code or Codex, npm only for what is downl
   assert.deepEqual(installPlan(manifest, allHost), { npm: {}, fcc: true });
   const none = normalizeChoice({ agents: { claude: { enabled: false }, codex: { enabled: false }, opencode: { enabled: false } } }, {});
   assert.deepEqual(installPlan(manifest, none), { npm: {}, fcc: false });
+});
+
+test("FCC ZIP builds receive deterministic version metadata from their pinned commit", () => {
+  const commit = "0123456789abcdef0123456789abcdef01234567";
+  assert.deepEqual(fccSourceBuildEnv(commit), {
+    SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0+g0123456789ab",
+    SETUPTOOLS_SCM_PRETEND_VERSION_FOR_FREE_CLAUDE_CODE: "0.0.0+g0123456789ab",
+  });
+  assert.throws(() => fccSourceBuildEnv("not-a-commit"), /invalid free-claude-code commit/);
 });
 
 test("agents are looked for on the POM's PATH, then where their installers put them", () => {
