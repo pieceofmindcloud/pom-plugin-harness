@@ -30,6 +30,7 @@ const PLUGIN_DIR: &str = "harness";
 pub struct Gateway {
     pub openai_base_url: String,
     pub api_key: String,
+    pub workspace_root: Option<String>,
 }
 
 impl Gateway {
@@ -44,9 +45,16 @@ impl Gateway {
             .as_str()
             .filter(|key| !key.trim().is_empty())
             .ok_or("host.configure has no gateway.api_key")?;
+        let workspace_root = match request.get("workspace_root") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(root)) if !root.trim().is_empty() => Some(root.clone()),
+            Some(Value::String(_)) => None,
+            Some(_) => return Err("workspace_root must be a string or null".into()),
+        };
         Ok(Self {
             openai_base_url: openai_base_url.to_owned(),
             api_key: api_key.to_owned(),
+            workspace_root,
         })
     }
 }
@@ -174,6 +182,10 @@ impl Supervisor {
             .env("HARNESS_POM_DATA_DIR", base.join("data"))
             .env("HARNESS_POM_LLM_BASE_URL", &gateway.openai_base_url)
             .env("HARNESS_POM_LLM_API_KEY", &gateway.api_key)
+            .env(
+                "HARNESS_POM_WORKSPACE_ROOT",
+                gateway.workspace_root.as_deref().unwrap_or(""),
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -381,9 +393,26 @@ mod tests {
             Gateway::from_configure(&request),
             Ok(Gateway {
                 openai_base_url: "http://127.0.0.1:8080/v1".into(),
-                api_key: "sk-1".into()
+                api_key: "sk-1".into(),
+                workspace_root: None,
             })
         );
+        assert_eq!(
+            Gateway::from_configure(&json!({
+                "gateway": {"openai_base_url": "http://127.0.0.1:8080/v1", "api_key": "sk-1"},
+                "workspace_root": "/tmp/projects"
+            }))
+            .unwrap()
+            .workspace_root
+            .as_deref(),
+            Some("/tmp/projects")
+        );
+        assert!(Gateway::from_configure(&json!({
+            "gateway": {"openai_base_url": "http://127.0.0.1:8080/v1", "api_key": "sk-1"},
+            "workspace_root": 42
+        }))
+        .unwrap_err()
+        .contains("workspace_root"));
         assert!(Gateway::from_configure(&json!({})).is_err());
         assert!(Gateway::from_configure(
             &json!({"gateway": {"openai_base_url": "file:///etc", "api_key": "sk-1"}})

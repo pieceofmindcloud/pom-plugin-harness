@@ -20,6 +20,15 @@ fn manifest_registers_one_admin_only_full_bleed_terminal() {
     let manifest = json("ui/manifest.json");
     assert_eq!(manifest["schema"], "pom-plugin-ui/v1");
     assert_eq!(manifest["plugin_code"], "harness");
+    assert_eq!(manifest["icon_image"], "ui/icon.png");
+    assert_eq!(
+        manifest["documentation"],
+        serde_json::json!([
+            "docs/README.md",
+            "docs/guia-workspace.md",
+            "docs/guia-desenvolvimento.md"
+        ])
+    );
 
     let menu = manifest["menu"].as_array().expect("menu array");
     assert_eq!(menu.len(), 1);
@@ -56,12 +65,25 @@ fn assets_include_the_dynamic_runtime_status() {
         BTreeSet::from([
             "ui/screens.js",
             "ui/plugin.css",
+            "ui/icon.png",
             "ui/runtime.json",
             "i18n/en.json",
             "i18n/pt-BR.json",
+            "docs/README.md",
+            "docs/guia-workspace.md",
+            "docs/guia-desenvolvimento.md",
         ])
     );
     assert!(text("src/lib.rs").contains("const RUNTIME_ASSET: &str = \"ui/runtime.json\";"));
+    assert!(fs::read(root().join("ui/icon.png"))
+        .unwrap()
+        .starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert!(text("build.rs").contains("image/png"));
+    assert!(text("build.rs").contains("text/markdown"));
+    assert!(text("docs/guia-workspace.md").contains("workspace_root"));
+    assert!(text("docs/guia-workspace.md").contains("GET /projects"));
+    assert!(text("tests/unit/launcher.test.mjs")
+        .contains("workspace listing returns visible immediate directories"));
 }
 
 #[test]

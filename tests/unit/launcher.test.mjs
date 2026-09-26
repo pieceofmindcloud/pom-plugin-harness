@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   herdrConfig,
+  listWorkspaceProjects,
   parseClientMessage,
   privateEnv,
   socketPath,
@@ -10,6 +11,23 @@ import {
   withPomProvider,
   withTrustedFolder,
 } from "../../runtime/launcher.mjs";
+
+test("workspace listing returns visible immediate directories and safe fallback states", async (t) => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = mkdtempSync(join(tmpdir(), "harness-workspace-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, "alpha"));
+  mkdirSync(join(root, ".private"));
+  writeFileSync(join(root, "notes.txt"), "ignored");
+  assert.deepEqual(listWorkspaceProjects(root), { status: "ready", projects: ["alpha"] });
+  assert.deepEqual(listWorkspaceProjects(join(root, "missing")), { status: "unavailable", projects: [] });
+  assert.deepEqual(listWorkspaceProjects(""), { status: "unavailable", projects: [] });
+  const empty = join(root, "empty");
+  mkdirSync(empty);
+  assert.deepEqual(listWorkspaceProjects(empty), { status: "empty", projects: [] });
+});
 
 test("herdr and pi get a private environment, never the host's herdr session", () => {
   const base = {
