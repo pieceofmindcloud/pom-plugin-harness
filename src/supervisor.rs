@@ -25,6 +25,14 @@ use std::time::Duration;
 
 const PLUGIN_DIR: &str = "harness";
 
+/// Generation of the plugin data layout. When the value stored in
+/// `data/.data-epoch` differs, the next start wipes `data/` (private home,
+/// downloaded agents, agent choices, herdr state) and the harness installs
+/// everything again from zero. Bump it only when a release must start clean;
+/// user projects live in the POM workspace root, never under `data/`.
+pub const DATA_EPOCH: u32 = 2;
+const EPOCH_FILE: &str = ".data-epoch";
+
 /// What the POM hands to the plugin in `host.configure`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Gateway {
@@ -172,6 +180,7 @@ impl Supervisor {
             return Err("this build does not bundle the harness runtime".into());
         }
         let base = plugin_directory()?;
+        reset_data_for_epoch(&base.join("data"), DATA_EPOCH)?;
         let runtime = unpack_runtime(&base.join("runtime"), self.archive, self.checksum)?;
         let node = runtime
             .join("bin")
@@ -297,6 +306,32 @@ fn plugin_directory() -> Result<PathBuf, String> {
     Ok(parent.join(PLUGIN_DIR))
 }
 
+/// Start from an empty data directory when it was written by another data
+/// epoch (or has no epoch, as before this marker existed), then record the
+/// current one. Returns whether the directory was wiped.
+pub fn reset_data_for_epoch(data: &Path, epoch: u32) -> Result<bool, String> {
+    let marker = data.join(EPOCH_FILE);
+    let current = fs::read_to_string(&marker)
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok());
+    if current == Some(epoch) {
+        return Ok(false);
+    }
+    let wiped = data.exists();
+    if wiped {
+        fs::remove_dir_all(data)
+            .map_err(|error| format!("reset harness data {}: {error}", data.display()))?;
+        eprintln!(
+            "harness: data epoch {} -> {epoch}; starting from a clean installation",
+            current.map_or_else(|| "none".to_owned(), |value| value.to_string())
+        );
+    }
+    fs::create_dir_all(data).map_err(|error| format!("{}: {error}", data.display()))?;
+    fs::write(&marker, format!("{epoch}\n"))
+        .map_err(|error| format!("{}: {error}", marker.display()))?;
+    Ok(wiped)
+}
+
 /// Unpack once per archive checksum, atomically, and drop older runtimes.
 pub fn unpack_runtime(root: &Path, archive: &[u8], checksum: &str) -> Result<PathBuf, String> {
     let id = &checksum[..checksum.len().min(16)];
@@ -340,6 +375,30 @@ mod tests {
             builder.append_data(&mut header, path, *bytes).unwrap();
         }
         builder.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn data_is_wiped_once_per_epoch_change() {
+        let data = std::env::temp_dir().join(format!("harness-epoch-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&data);
+        fs::create_dir_all(data.join("home/.claude")).unwrap();
+        fs::write(data.join("agents-choice.json"), "{}").unwrap();
+
+        // Data written before the marker existed is reset.
+        assert!(reset_data_for_epoch(&data, 2).unwrap());
+        assert!(!data.join("agents-choice.json").exists());
+        assert!(!data.join("home").exists());
+        assert_eq!(fs::read_to_string(data.join(EPOCH_FILE)).unwrap(), "2\n");
+
+        // Same epoch: kept.
+        fs::write(data.join("agents-choice.json"), "{}").unwrap();
+        assert!(!reset_data_for_epoch(&data, 2).unwrap());
+        assert!(data.join("agents-choice.json").exists());
+
+        // A bumped epoch starts clean again.
+        assert!(reset_data_for_epoch(&data, 3).unwrap());
+        assert!(!data.join("agents-choice.json").exists());
+        fs::remove_dir_all(&data).unwrap();
     }
 
     #[test]
