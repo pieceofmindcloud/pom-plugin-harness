@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "plugin_code": "harness",
+  "plugin_abi": 1,
+  "feature_set": [
+    "harness.core"
+  ]
+}

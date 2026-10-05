@@ -106,6 +106,7 @@ jobs:
           path: |
             dist-release/pom-plugin-harness-${{ matrix.platform }}.${{ matrix.ext }}
             dist-release/pom-plugin-harness-${{ matrix.platform }}.metadata.json
+            dist-release/pom-plugin-${{ matrix.platform }}.json
           if-no-files-found: error
           # Os pacotes só passam entre as etapas; a release guarda os definitivos.
           retention-days: 1
