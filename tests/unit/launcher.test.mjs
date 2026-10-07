@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   herdrConfig,
+  windowsPaneShell,
+  withDefaultShell,
   listWorkspaceProjects,
   parseClientMessage,
   privateEnv,
@@ -156,4 +158,19 @@ test("terminal size and browser messages are validated", () => {
   assert.deepEqual(parseClientMessage(Buffer.from("{not json"), false), { type: "input", data: "{not json" });
   assert.deepEqual(parseClientMessage(Buffer.from("ls\r"), false), { type: "input", data: "ls\r" });
   assert.deepEqual(parseClientMessage(Buffer.from([0x1b, 0x5b, 0x41]), true), { type: "input", data: "\x1b[A" });
+});
+
+test("the Windows pane shell puts the private PATH back before PowerShell", () => {
+  const script = windowsPaneShell(["C:\\pom\\data\\bin", "C:\\pom\\bin"]);
+  assert.match(script, /^@echo off\r\n/);
+  assert.match(script, /set "PATH=C:\\pom\\data\\bin;C:\\pom\\bin;%PATH%"\r\n/);
+  assert.match(script, /powershell\.exe -NoLogo\r\n$/);
+});
+
+test("an existing herdr config gains the plugin's shell only when it names none", () => {
+  const old = "onboarding = false\n\n[terminal]\nshell_mode = \"non_login\"\n";
+  assert.equal(withDefaultShell(old, "C:\\d\\pom-shell.cmd"), "onboarding = false\n\n[terminal]\ndefault_shell = \"C:\\\\d\\\\pom-shell.cmd\"\nshell_mode = \"non_login\"\n");
+  assert.equal(withDefaultShell("onboarding = false\n", "/bin/sh"), "onboarding = false\n\n[terminal]\ndefault_shell = \"/bin/sh\"\n");
+  assert.equal(withDefaultShell('[terminal]\ndefault_shell = "pwsh.exe"\n', "x"), undefined, "a chosen shell is kept");
+  assert.equal(withDefaultShell("[terminal]\n", ""), undefined);
 });

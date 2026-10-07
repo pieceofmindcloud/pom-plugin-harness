@@ -48,11 +48,16 @@ const env = process.env;
 const isWindows = process.platform === "win32";
 const dataDir = env.HARNESS_POM_DATA_DIR || join(here, "data");
 const home = join(dataDir, "home");
-const workspace = join(dataDir, "workspace");
 const binDir = join(dataDir, "bin");
 const llmBaseUrl = (env.HARNESS_POM_LLM_BASE_URL || "").replace(/\/+$/, "");
 const llmApiKey = env.HARNESS_POM_LLM_API_KEY || "";
 const workspaceRoot = env.HARNESS_POM_WORKSPACE_ROOT || "";
+/**
+ * Where pi and every agent start: the POM's shared projects workspace (Storage
+ * settings, `workspace_root` in host.configure), the same folder every harness
+ * plugin works in. Only a POM without one falls back to a plugin-private folder.
+ */
+const workspace = workspaceRoot || join(dataDir, "workspace");
 const herdrBin = join(here, "bin", isWindows ? "herdr.exe" : "herdr");
 const nodeBin = process.execPath;
 const piCli = join(here, "app", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "bundle", "cli.js");
@@ -153,7 +158,7 @@ export function privateEnv(options) {
 }
 
 function pickShell() {
-  if (isWindows) return "";
+  if (isWindows) return join(binDir, "pom-shell.cmd");
   return ["/bin/bash", "/usr/bin/bash", "/bin/sh"].find((candidate) => existsSync(candidate)) ?? "/bin/sh";
 }
 
@@ -170,6 +175,22 @@ function writePiWrapper() {
 }
 
 /**
+ * The pane shell on Windows. herdr's terminal library rebuilds each pane's
+ * environment from the registry, so PATH comes back as the machine's own and
+ * `pi`, `pom-agents` and the agents are "not recognized". This wrapper puts the
+ * private directories back in front before handing the pane to PowerShell.
+ */
+export function windowsPaneShell(prefix) {
+  return `@echo off\r\nset "PATH=${prefix.join(";")};%PATH%"\r\npowershell.exe -NoLogo\r\n`;
+}
+
+function writeWindowsPaneShell(shell, runEnv) {
+  if (!isWindows) return;
+  const prefix = runEnv.PATH.split(";").slice(0, 2);
+  writeFileSync(shell, windowsPaneShell(prefix));
+}
+
+/**
  * herdr's own config: its first-run tour is skipped (the plugin already set
  * up the workspace), and a non-login shell keeps the private PATH in panes.
  */
@@ -180,9 +201,25 @@ export function herdrConfig(shell) {
   return lines.join("\n");
 }
 
+/**
+ * A config written before the plugin chose the shell gets `default_shell`
+ * under `[terminal]`; one that already names a shell is left alone.
+ */
+export function withDefaultShell(config, shell) {
+  if (!shell || /^\s*default_shell\s*=/m.test(config)) return undefined;
+  const line = `default_shell = ${JSON.stringify(shell)}`;
+  if (/^\[terminal\]\s*$/m.test(config)) return config.replace(/^\[terminal\]\s*$/m, (header) => `${header}\n${line}`);
+  return `${config.replace(/\n*$/, "\n")}\n[terminal]\n${line}\n`;
+}
+
 function writeHerdrConfig(configPath, shell) {
   mkdirSync(dirname(configPath), { recursive: true });
-  if (!existsSync(configPath)) writeFileSync(configPath, herdrConfig(shell));
+  if (!existsSync(configPath)) {
+    writeFileSync(configPath, herdrConfig(shell));
+    return;
+  }
+  const updated = withDefaultShell(readFileSync(configPath, "utf8"), shell);
+  if (updated) writeFileSync(configPath, updated);
 }
 
 /**
@@ -512,7 +549,9 @@ function startTerminalServer(runEnv) {
     sockets.handleUpgrade(request, socket, head, (ws) => {
       const { cols, rows } = terminalSize(request.url);
       // One herdr client per browser tab; closing it only detaches.
-      const term = pty.spawn(herdrBin, [], { name: "xterm-256color", cols, rows, cwd: home, env: runEnv });
+      // The ConPTY bundled with node-pty: the one in Windows drops part of the
+      // browser's mouse reports, so herdr's tabs and agents did not take clicks.
+      const term = pty.spawn(herdrBin, [], { name: "xterm-256color", cols, rows, cwd: home, env: runEnv, useConptyDll: isWindows });
       term.onData((data) => {
         if (ws.readyState === ws.OPEN) ws.send(data);
       });
@@ -716,6 +755,7 @@ async function main() {
   const shell = pickShell();
   const runEnv = privateEnv({ base: env, home, binDir, herdrBin, shell, apiKey: llmApiKey, socket });
   writePiWrapper();
+  writeWindowsPaneShell(shell, runEnv);
   if (runEnv.LOCALAPPDATA) mkdirSync(runEnv.LOCALAPPDATA, { recursive: true });
   writeHerdrConfig(runEnv.HERDR_CONFIG_PATH, shell);
   writePiTrust();
