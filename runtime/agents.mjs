@@ -36,8 +36,8 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
 export const PROVIDER = "pom";
-/** FCC keys the plugin owns in `~/.fcc/.env`; everything else there is the user's. */
-export const FCC_OWNED_KEYS = ["HOST", "PORT", "PROXY_AUTH_ENABLED", "LLAMACPP_BASE_URL"];
+/** FCC connection keys and unset defaults the plugin manages in `~/.fcc/.env`. */
+export const FCC_OWNED_KEYS = ["HOST", "PORT", "PROXY_AUTH_ENABLED", "LLAMACPP_BASE_URL", "FCC_OPEN_BROWSER"];
 
 /** The agents offered next to pi, in tab order, with the npm package of each. */
 export const AGENTS = [
@@ -277,6 +277,7 @@ function dotenvValue(text, key) {
  */
 export function withFccSettings(text, owned, modelIds, token) {
   const values = { ...owned };
+  if (dotenvValue(text, "FCC_OPEN_BROWSER") === undefined) values.FCC_OPEN_BROWSER = "false";
   const model = dotenvValue(text, "MODEL");
   const served = new Set(modelIds.map((id) => `llamacpp/${id}`));
   if (modelIds.length > 0 && (!model || (model.startsWith("llamacpp/") && !served.has(model)))) {
@@ -814,7 +815,7 @@ export function superviseFcc({ fccBin, exe, runEnv, home, log }) {
   const start = () => {
     child = spawn(join(fccBin, `fcc-server${exe}`), [], {
       cwd: home,
-      env: { ...runEnv, BROWSER: "true" },
+      env: runEnv,
       stdio: ["ignore", "pipe", "pipe"],
     });
     child.stdout.on("data", () => {});

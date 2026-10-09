@@ -226,7 +226,10 @@ test("FCC: the plugin's keys are set and every other line is the user's", () => 
   const fresh = withFccSettings(undefined, owned, ["a@d-2", "a"], "new-token");
   assert.match(fresh, /^FCC_CONFIG_SCHEMA=1$/m);
   assert.match(fresh, /^MODEL=llamacpp\/a$/m);
+  assert.match(fresh, /^FCC_OPEN_BROWSER=false$/m, "the admin page does not open on startup by default");
   assert.match(fresh, /^ANTHROPIC_AUTH_TOKEN=new-token$/m);
+  const browserChoice = withFccSettings("FCC_OPEN_BROWSER=true\n", owned, ["a"], "t");
+  assert.match(browserChoice, /^FCC_OPEN_BROWSER=true$/m, "an explicit user setting is kept");
   assert.match(withFccSettings("MODEL=llamacpp/gone\n", owned, ["b"], "t"), /^MODEL=llamacpp\/b$/m);
   assert.equal(withFccSettings(fresh, owned, ["a@d-2", "a"], "other"), fresh, "stable once written");
 });
