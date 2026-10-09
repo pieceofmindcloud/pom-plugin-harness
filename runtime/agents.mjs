@@ -54,6 +54,41 @@ export const AGENTS = [
  * Anything missing or malformed falls back to the default: every agent on,
  * from the machine when it is installed there, else the pinned release.
  */
+/**
+ * The keys in one read of a raw terminal, each as the plain form the agent
+ * chooser handles: printable characters, "\r" for Enter, "\x1b" for Escape,
+ * "\x03" for Ctrl+C and "\x1b[A"/"\x1b[B" for the arrows. A terminal may
+ * encode a key as an escape sequence instead: the Windows console's
+ * win32-input-mode (ConPTY, `ESC [ Vk;Sc;Uc;Kd;Cs;Rc _`, one event per key
+ * press and release), the kitty keyboard protocol (`ESC [ code u`) and
+ * xterm's modifyOtherKeys (`ESC [ 27;mod;code ~`). Under the first, Enter never
+ * came as "\r" and the chooser on Windows did not start the install. Key
+ * releases and keys with no plain form are dropped.
+ */
+export function terminalKeys(data) {
+  const plain = (code) => (code === 10 ? "\r" : code > 0 ? String.fromCodePoint(code) : undefined);
+  const keys = [];
+  for (const token of data.match(/\x1b\[[0-9;?]*[A-Za-z~_]|\x1bO[A-Za-z]|\x1b|\r\n|[\s\S]/g) ?? []) {
+    const win32 = /^\x1b\[(\d*);(\d*);(\d*);(\d*);(\d*);(\d*)_$/.exec(token);
+    const kitty = /^\x1b\[(\d+)(?:;\d+(?::\d+)?)*u$/.exec(token);
+    const other = /^\x1b\[27;\d+;(\d+)~$/.exec(token);
+    let key = token;
+    if (win32) {
+      const [virtualKey, , unicode, down] = win32.slice(1, 5).map(Number);
+      if (down !== 1) continue;
+      key = virtualKey === 38 ? "\x1b[A" : virtualKey === 40 ? "\x1b[B" : plain(unicode);
+    } else if (kitty) {
+      key = plain(Number(kitty[1]));
+    } else if (other) {
+      key = plain(Number(other[1]));
+    } else if (token === "\n" || token === "\r\n") {
+      key = "\r";
+    }
+    if (key !== undefined) keys.push(key);
+  }
+  return keys;
+}
+
 export function normalizeChoice(raw, detected) {
   const agents = {};
   for (const { kind } of AGENTS) {

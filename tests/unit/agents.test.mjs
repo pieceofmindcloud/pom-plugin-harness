@@ -15,6 +15,7 @@ import {
   withOpencodeProvider,
   withOutputCeiling,
   withPomContextWindows,
+  terminalKeys,
 } from "../../runtime/agents.mjs";
 import { relayTarget } from "../../runtime/launcher.mjs";
 
@@ -221,4 +222,27 @@ test("the relay maps only its secret path onto the POM /v1", () => {
   assert.equal(relayTarget("/relay/s3cret/v1/models?x=1", "s3cret", "http://h/v1"), "http://h/v1/models?x=1");
   assert.equal(relayTarget("/relay/wrong/v1/models", "s3cret", "http://h/v1"), undefined);
   assert.equal(relayTarget("/terminal", "s3cret", "http://h/v1"), undefined);
+});
+
+test("the agent chooser reads Enter, arrows and keys however the terminal encodes them", () => {
+  // Plain bytes (macOS, Linux): one read may carry several keys.
+  assert.deepEqual(terminalKeys("\r"), ["\r"]);
+  assert.deepEqual(terminalKeys("\n"), ["\r"]);
+  assert.deepEqual(terminalKeys("\r\n"), ["\r"]);
+  assert.deepEqual(terminalKeys(" \x1b[B\x1b[A\r"), [" ", "\x1b[B", "\x1b[A", "\r"]);
+  assert.deepEqual(terminalKeys("\x1bOB"), ["\x1bOB"]);
+  assert.deepEqual(terminalKeys("\x1b"), ["\x1b"]);
+  // Windows ConPTY win32-input-mode: Vk;Sc;Uc;Kd;Cs;Rc_, a press and a release per key.
+  assert.deepEqual(terminalKeys("\x1b[13;28;13;1;0;1_\x1b[13;28;13;0;0;1_"), ["\r"]);
+  assert.deepEqual(terminalKeys("\x1b[40;80;0;1;256;1_\x1b[40;80;0;0;256;1_"), ["\x1b[B"]);
+  assert.deepEqual(terminalKeys("\x1b[38;72;0;1;256;1_"), ["\x1b[A"]);
+  assert.deepEqual(terminalKeys("\x1b[32;57;32;1;0;1_\x1b[65;30;97;1;0;1_"), [" ", "a"]);
+  assert.deepEqual(terminalKeys("\x1b[27;1;27;1;0;1_"), ["\x1b"]);
+  assert.deepEqual(terminalKeys("\x1b[67;46;3;1;8;1_"), ["\x03"]);
+  assert.deepEqual(terminalKeys("\x1b[16;42;0;1;16;1_"), []);
+  // The kitty keyboard protocol and xterm's modifyOtherKeys.
+  assert.deepEqual(terminalKeys("\x1b[13u"), ["\r"]);
+  assert.deepEqual(terminalKeys("\x1b[13;1u"), ["\r"]);
+  assert.deepEqual(terminalKeys("\x1b[27u"), ["\x1b"]);
+  assert.deepEqual(terminalKeys("\x1b[27;1;13~"), ["\r"]);
 });

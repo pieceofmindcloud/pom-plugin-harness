@@ -10,7 +10,7 @@
 
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { AGENTS, normalizeChoice } from "./agents.mjs";
+import { AGENTS, normalizeChoice, terminalKeys } from "./agents.mjs";
 
 const dataDir = process.argv[2];
 const detectedPath = join(dataDir, "agents-detected.json");
@@ -132,7 +132,7 @@ if (!process.stdin.isTTY) {
   process.stdin.setEncoding("utf8");
   // One read can carry several keys (fast typing, a paste): handle each in turn.
   process.stdin.on("data", (data) => {
-    for (const key of data.match(/\x1b\[[0-9;]*[A-Za-z~]|\x1bO[A-Za-z]|\x1b|[\s\S]/g) ?? []) {
+    for (const key of terminalKeys(data)) {
       if (onKey(key) === "done") return;
     }
     render();
@@ -151,7 +151,7 @@ if (!process.stdin.isTTY) {
         chosen.source === "host"
           ? { enabled: chosen.enabled, source: "bundled" }
           : { enabled: chosen.enabled, source: "host", path: detected[agent.kind].path };
-    } else if (key === "\r" || key === "\n") {
+    } else if (key === "\r") {
       finish();
       return "done";
     } else if (key === "q" || key === "\x1b" || key === "\x03") {
