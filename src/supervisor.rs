@@ -30,7 +30,7 @@ const PLUGIN_DIR: &str = "harness";
 /// downloaded agents, agent choices, herdr state) and the harness installs
 /// everything again from zero. Bump it only when a release must start clean;
 /// user projects live in the POM workspace root, never under `data/`.
-pub const DATA_EPOCH: u32 = 2;
+pub const DATA_EPOCH: u32 = 3;
 const EPOCH_FILE: &str = ".data-epoch";
 
 /// What the POM hands to the plugin in `host.configure`.
