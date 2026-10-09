@@ -688,9 +688,9 @@ async function startAgents(runEnv, terminalPort, models) {
   log(found.length > 0 ? `already on this machine: ${found.join(", ")}` : "no agent installed on this machine");
   writeFileSync(agentsDetectedPath, `${JSON.stringify({ detected, versions: manifest.npm, home: homedir() }, null, 2)}\n`);
   writeSetupCommand();
+  await closeLegacySetupTabs(runEnv).catch((error) => log(`old setup tab: ${error.message}`));
   const existingChoice = readJson(agentsChoicePath, undefined);
   if (!existingChoice || typeof existingChoice.savedAt !== "string") {
-    await closeLegacySetupTabs(runEnv).catch((error) => log(`old setup tab: ${error.message}`));
     const savedAt = new Date().toISOString();
     const choice = normalizeChoice(undefined, detected);
     writeFileSync(`${agentsChoicePath}.tmp`, `${JSON.stringify({ savedAt, agents: choice.agents }, null, 2)}\n`);
