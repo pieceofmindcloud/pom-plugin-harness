@@ -8,6 +8,7 @@
 - `DATA_EPOCH` in `src/supervisor.rs` decides when a new release wipes the plugin `data/` and reinstalls from zero; bump it only when that is intended.
 - The plugin host uses its own stdin/stdout for IPC: processes the library starts must never inherit them (`src/supervisor.rs`).
 - `scripts/build.sh` runs `scripts/fetch-runtime.sh` and passes `HARNESS_RUNTIME_ARCHIVE` to cargo; without it the library builds but reports that no runtime is bundled.
+- The POM's local development rebuild runs the `development.rebuild` steps of `ui/manifest.json` (`scripts/dev-ui.sh`, `scripts/dev-runtime.sh`) with the source read-only: they write to `POM_PLUGIN_OUT_DIR`, and `build.rs` takes the UI and the runtime archive from there. `dev-runtime.sh` repacks `build/runtime-<platform>` with this source's runtime scripts, so `scripts/fetch-runtime.sh` must have run once on that machine.
 - Checks: `cargo test`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `node --test tests/unit/*.test.mjs` (Node 22 needs `--experimental-strip-types`). When `cargo` resolves to a wrapper, use `~/.cargo/bin/cargo`.
 
 ## Maintaining this file

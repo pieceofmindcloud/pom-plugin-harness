@@ -14,14 +14,17 @@ fn content_type(name: &str) -> &'static str {
     }
 }
 
-/// The herdr + pi runtime archive from `scripts/fetch-runtime.sh`, named by
-/// `HARNESS_RUNTIME_ARCHIVE`. Without it the library still builds, and the plugin
-/// reports that no runtime is bundled.
+/// The herdr + pi runtime archive, named by `HARNESS_RUNTIME_ARCHIVE`
+/// (`scripts/build.sh`), or else the one for the target platform that the POM's
+/// local rebuild made in `POM_PLUGIN_OUT_DIR` (`scripts/dev-runtime.sh`), or
+/// the one `scripts/fetch-runtime.sh` left in `build/`. Without any the library
+/// still builds, and the plugin reports that no runtime is bundled.
 fn runtime_archive(generated: &mut String) {
     println!("cargo:rerun-if-env-changed=HARNESS_RUNTIME_ARCHIVE");
     let archive = env::var("HARNESS_RUNTIME_ARCHIVE")
         .ok()
-        .filter(|value| !value.is_empty());
+        .filter(|value| !value.is_empty())
+        .or_else(local_runtime_archive);
     let Some(archive) = archive else {
         generated.push_str("pub static RUNTIME_ARCHIVE: &[u8] = &[];\n");
         generated.push_str("pub static RUNTIME_SHA256: &str = \"\";\n");
@@ -45,18 +48,59 @@ fn runtime_archive(generated: &mut String) {
     ));
 }
 
+/// `build/runtime-<platform>.tar.gz` with its checksum, for the target platform.
+fn local_runtime_archive() -> Option<String> {
+    let platform = match (
+        env::var("CARGO_CFG_TARGET_OS").ok()?.as_str(),
+        env::var("CARGO_CFG_TARGET_ARCH").ok()?.as_str(),
+    ) {
+        ("linux", "x86_64") => "linux-x86_64",
+        ("macos", "aarch64") => "macos-aarch64",
+        ("windows", "x86_64") => "windows-x86_64",
+        _ => return None,
+    };
+    println!("cargo:rerun-if-env-changed=POM_PLUGIN_OUT_DIR");
+    let name = format!("runtime-{platform}.tar.gz");
+    let built = env::var("POM_PLUGIN_OUT_DIR")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(|out| Path::new(&out).join(&name));
+    let fetched = Path::new(&env::var("CARGO_MANIFEST_DIR").ok()?)
+        .join("build")
+        .join(&name);
+    built.into_iter().chain([fetched]).find_map(|archive| {
+        println!("cargo:rerun-if-changed={}", archive.display());
+        let checksum = format!("{}.sha256", archive.display());
+        (archive.is_file() && Path::new(&checksum).is_file()).then(|| archive.display().to_string())
+    })
+}
+
+/// Where the built UI is: the POM's local rebuild builds it in
+/// `POM_PLUGIN_OUT_DIR` (`scripts/dev-ui.sh`, the source is read-only there),
+/// any other build in the source's `ui/dist` (`scripts/build-ui.sh`).
+fn ui_dist(root: &str) -> std::path::PathBuf {
+    println!("cargo:rerun-if-env-changed=POM_PLUGIN_OUT_DIR");
+    env::var("POM_PLUGIN_OUT_DIR")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(|out| Path::new(&out).join("ui-build/ui/dist"))
+        .filter(|dist| dist.join("screens.js").is_file())
+        .unwrap_or_else(|| Path::new(root).join("ui/dist"))
+}
+
 fn main() {
     let root = env::var("CARGO_MANIFEST_DIR").expect("manifest directory");
+    let dist = ui_dist(&root);
     let mut entries = Vec::new();
 
     for (directory, prefix, extensions) in [
-        ("ui/dist", "ui", &["js", "css"][..]),
-        ("ui", "ui", &["png"][..]),
-        ("ui/dist/i18n", "i18n", &["json"][..]),
-        ("docs", "docs", &["md"][..]),
+        (dist.clone(), "ui", &["js", "css"][..]),
+        (Path::new(&root).join("ui"), "ui", &["png"][..]),
+        (dist.join("i18n"), "i18n", &["json"][..]),
+        (Path::new(&root).join("docs"), "docs", &["md"][..]),
     ] {
-        println!("cargo:rerun-if-changed={directory}");
-        let Ok(files) = fs::read_dir(Path::new(&root).join(directory)) else {
+        println!("cargo:rerun-if-changed={}", directory.display());
+        let Ok(files) = fs::read_dir(&directory) else {
             continue;
         };
         for file in files.flatten() {
