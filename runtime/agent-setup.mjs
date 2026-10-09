@@ -88,7 +88,7 @@ function render() {
 }
 
 function save() {
-  const next = { savedAt: new Date().toISOString(), agents: choice.agents };
+  const next = { schema: 1, savedAt: new Date().toISOString(), agents: choice.agents };
   writeFileSync(`${choicePath}.tmp`, `${JSON.stringify(next, null, 2)}\n`);
   renameSync(`${choicePath}.tmp`, choicePath);
   return next.savedAt;

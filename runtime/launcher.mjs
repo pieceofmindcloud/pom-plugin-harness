@@ -22,7 +22,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, unwatchFile, watchFile, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, unwatchFile, watchFile, writeFileSync } from "node:fs";
 import http from "node:http";
 import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
@@ -33,6 +33,7 @@ import {
   configureAgents,
   detectHostAgents,
   fccPort,
+  hasCurrentAgentsChoice,
   installAgents,
   normalizeChoice,
   parsePomModels,
@@ -421,7 +422,6 @@ async function ensurePiWorkspace(runEnv) {
     if (!workspaceMoved(cwd, workspace)) return;
     log(`the POM workspace runs in ${cwd}, not in ${workspace}: making it again there`);
     await herdrJson(runEnv, ["workspace", "close", pom.workspace_id]);
-    rmSync(join(dataDir, "agents-tabs.json"), { force: true });
   }
   mkdirSync(workspace, { recursive: true });
   const created = await herdrJson(runEnv, ["workspace", "create", "--cwd", workspace, "--label", "POM", "--focus"]);
@@ -618,24 +618,27 @@ async function namePiTab(runEnv) {
   if (piTab?.label === "1") await herdrJson(runEnv, ["tab", "rename", piTab.tab_id, "pi"]);
 }
 
-/** One tab per chosen agent in the POM workspace, each opened once; herdr restores them afterwards. */
+/** Ensure each chosen agent has a tab in the POM workspace; herdr restores existing tabs. */
 async function openAgentTabs(runEnv, kinds) {
-  const statePath = join(dataDir, "agents-tabs.json");
-  const opened = new Set(readJson(statePath, {}).opened ?? []);
-  const missing = AGENTS.filter((agent) => kinds.includes(agent.kind) && !opened.has(agent.kind));
-  if (missing.length === 0) return;
   const pom = await pomWorkspace(runEnv);
   if (!pom) return;
+  const listed = await herdrJson(runEnv, ["tab", "list"]);
+  const present = new Set((listed.tabs ?? [])
+    .filter((tab) => tab.workspace_id === pom.workspace_id)
+    .map((tab) => tab.label));
+  const missing = AGENTS.filter((agent) => kinds.includes(agent.kind) && !present.has(agent.label));
+  const toStart = [];
   for (const agent of missing) {
     const tab = await herdrJson(runEnv, [
       "tab", "create", "--workspace", pom.workspace_id, "--cwd", workspace, "--label", agent.label, "--no-focus",
     ]);
-    await herdrJson(runEnv, [
-      "agent", "start", agent.kind, "--kind", agent.kind, "--pane", tab.root_pane.pane_id, "--timeout", "60000",
-    ]).catch((error) => log(error.message));
-    opened.add(agent.kind);
-    writeFileSync(statePath, `${JSON.stringify({ opened: [...opened] })}\n`);
+    toStart.push({ agent, pane: tab.root_pane.pane_id });
   }
+  await Promise.all(toStart.map(async ({ agent, pane }) => {
+    await herdrJson(runEnv, [
+      "agent", "start", agent.kind, "--kind", agent.kind, "--pane", pane, "--timeout", "60000",
+    ]).catch((error) => log(error.message));
+  }));
 }
 
 async function closeLegacySetupTabs(runEnv) {
@@ -690,10 +693,10 @@ async function startAgents(runEnv, terminalPort, models) {
   writeSetupCommand();
   await closeLegacySetupTabs(runEnv).catch((error) => log(`old setup tab: ${error.message}`));
   const existingChoice = readJson(agentsChoicePath, undefined);
-  if (!existingChoice || typeof existingChoice.savedAt !== "string") {
+  if (!hasCurrentAgentsChoice(existingChoice)) {
     const savedAt = new Date().toISOString();
     const choice = normalizeChoice(undefined, detected);
-    writeFileSync(`${agentsChoicePath}.tmp`, `${JSON.stringify({ savedAt, agents: choice.agents }, null, 2)}\n`);
+    writeFileSync(`${agentsChoicePath}.tmp`, `${JSON.stringify({ schema: 1, savedAt, agents: choice.agents }, null, 2)}\n`);
     renameSync(`${agentsChoicePath}.tmp`, agentsChoicePath);
     log("selecting Claude Code, Codex and opencode automatically");
   }

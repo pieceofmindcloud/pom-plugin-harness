@@ -6,6 +6,7 @@ import { test } from "node:test";
 import {
   claudeLimitsEnv,
   fccSourceBuildEnv,
+  hasCurrentAgentsChoice,
   hostAgentDirs,
   hostAgentExecutableNames,
   installAgents,
@@ -27,6 +28,12 @@ import {
 import { relayTarget } from "../../runtime/launcher.mjs";
 
 const manifest = { npm: { "@anthropic-ai/claude-code": "2.1.281", "@openai/codex": "0.156.1", "opencode-ai": "1.18.32" } };
+
+test("only current-format saved choices survive the automatic all-agents migration", () => {
+  assert.equal(hasCurrentAgentsChoice({ schema: 1, savedAt: "now", agents: {} }), true);
+  assert.equal(hasCurrentAgentsChoice({ savedAt: "old", agents: {} }), false);
+  assert.equal(hasCurrentAgentsChoice(undefined), false);
+});
 
 test("automatic first-run setup enables every agent and reuses host installs", () => {
   const detected = { codex: { path: "/opt/homebrew/bin/codex", version: "0.150.0" } };

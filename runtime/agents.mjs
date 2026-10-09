@@ -134,6 +134,10 @@ export class TerminalKeyDecoder {
   }
 }
 
+export function hasCurrentAgentsChoice(saved) {
+  return saved?.schema === 1 && typeof saved.savedAt === "string";
+}
+
 export function normalizeChoice(raw, detected) {
   const agents = {};
   for (const { kind } of AGENTS) {
@@ -678,10 +682,10 @@ export async function installAgents(context) {
   };
   const exe = windows ? ".exe" : "";
 
-  let nodeModules;
   const packages = Object.entries(plan.npm).map(([name, version]) => `${name}@${version}`);
-  if (packages.length > 0) {
-    const target = await installOnce(agentsRoot, "npm", plan.npm, async (dir) => {
+  const installNpm = packages.length === 0
+    ? Promise.resolve(undefined)
+    : installOnce(agentsRoot, "npm", plan.npm, async (dir) => {
       log(`installing ${packages.join(", ")} from npm`);
       writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "pom-agents", private: true }));
       await run(nodeBin, [npmCli, "install", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund", ...packages], {
@@ -689,12 +693,9 @@ export async function installAgents(context) {
         env,
       });
     });
-    nodeModules = join(target, "node_modules");
-  }
-
-  let fccBin;
-  if (plan.fcc) {
-    const target = await installOnce(agentsRoot, "fcc", { uv: manifest.uv, fcc: manifest.fcc }, async (dir) => {
+  const installFcc = !plan.fcc
+    ? Promise.resolve(undefined)
+    : installOnce(agentsRoot, "fcc", { uv: manifest.uv, fcc: manifest.fcc }, async (dir) => {
       log(`installing uv ${manifest.uv.version}`);
       const archive = join(dataDir, "cache", manifest.uv.asset);
       if (!existsSync(archive) || sha256(archive) !== manifest.uv.sha256) await download(manifest.uv.url, archive);
@@ -720,8 +721,14 @@ export async function installAgents(context) {
         },
       });
     });
-    fccBin = join(target, "tools", "bin");
-  }
+  const installs = await Promise.allSettled([installNpm, installFcc]);
+  const failed = installs.find((result) => result.status === "rejected");
+  if (failed?.status === "rejected") throw failed.reason;
+  const [npmResult, fccResult] = installs;
+  const npmTarget = npmResult.status === "fulfilled" ? npmResult.value : undefined;
+  const fccTarget = fccResult.status === "fulfilled" ? fccResult.value : undefined;
+  const nodeModules = npmTarget ? join(npmTarget, "node_modules") : undefined;
+  const fccBin = fccTarget ? join(fccTarget, "tools", "bin") : undefined;
 
   const bundled = {
     claude: () => [findPlatformBinary(nodeModules, "@anthropic-ai", "claude-code-", [`claude${exe}`])],
