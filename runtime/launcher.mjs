@@ -22,11 +22,11 @@
 
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, unwatchFile, watchFile, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, unwatchFile, watchFile, writeFileSync } from "node:fs";
 import http from "node:http";
 import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
-import path, { dirname, join } from "node:path";
+import path, { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   AGENTS,
@@ -394,10 +394,36 @@ async function waitForServer(runEnv) {
   throw new Error("herdr server did not start");
 }
 
-/** A "POM" workspace with a pi agent, created once; herdr restores it afterwards. */
+/** Whether a workspace whose panes run in `cwd` must be made again in `target`. */
+export function workspaceMoved(cwd, target) {
+  return Boolean(cwd) && Boolean(target) && resolve(cwd) !== resolve(target);
+}
+
+/** The folder the panes of a workspace run in (its first pane's), or null. */
+async function workspaceCwd(runEnv, workspaceId) {
+  const listed = await herdrJson(runEnv, ["pane", "list"]);
+  return (listed.panes ?? []).find((pane) => pane.workspace_id === workspaceId)?.cwd ?? null;
+}
+
+/**
+ * A "POM" workspace with a pi agent, created once; herdr restores it afterwards.
+ * herdr cannot move a workspace, so one restored in another folder than the
+ * POM's shared workspace (made before the POM named that folder, or before it
+ * changed) is closed and made again where the POM says, and the agent tabs
+ * open again in it. The files of the old folder stay where they are.
+ */
 async function ensurePiWorkspace(runEnv) {
   const listed = await herdrJson(runEnv, ["workspace", "list"]);
-  if ((listed.workspaces ?? []).length > 0) return;
+  const existing = listed.workspaces ?? [];
+  if (existing.length > 0) {
+    const pom = existing.find((entry) => entry.label === "POM") ?? existing[0];
+    const cwd = await workspaceCwd(runEnv, pom.workspace_id);
+    if (!workspaceMoved(cwd, workspace)) return;
+    log(`the POM workspace runs in ${cwd}, not in ${workspace}: making it again there`);
+    await herdrJson(runEnv, ["workspace", "close", pom.workspace_id]);
+    rmSync(join(dataDir, "agents-tabs.json"), { force: true });
+  }
+  mkdirSync(workspace, { recursive: true });
   const created = await herdrJson(runEnv, ["workspace", "create", "--cwd", workspace, "--label", "POM", "--focus"]);
   const pane = created.root_pane.pane_id;
   await herdrJson(runEnv, ["agent", "start", "pi", "--kind", "pi", "--pane", pane, "--timeout", "60000"]);

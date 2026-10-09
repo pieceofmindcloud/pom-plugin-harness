@@ -12,7 +12,16 @@ import {
   withDefaultModel,
   withPomProvider,
   withTrustedFolder,
+  workspaceMoved,
 } from "../../runtime/launcher.mjs";
+
+test("a workspace restored in another folder than the POM's is made again there", () => {
+  assert.equal(workspaceMoved("/data/harness/data/workspace", "/data/home/pom_workspace"), true);
+  assert.equal(workspaceMoved("/data/home/pom_workspace", "/data/home/pom_workspace/"), false);
+  assert.equal(workspaceMoved("/data/home/pom_workspace/../pom_workspace", "/data/home/pom_workspace"), false);
+  assert.equal(workspaceMoved(null, "/data/home/pom_workspace"), false);
+  assert.equal(workspaceMoved("/data/harness/data/workspace", ""), false);
+});
 
 test("workspace listing returns visible immediate directories and safe fallback states", async (t) => {
   const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
