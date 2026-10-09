@@ -166,6 +166,9 @@ test("terminal size and browser messages are validated", () => {
   assert.deepEqual(parseClientMessage(Buffer.from('{"type":"resize","cols":1,"rows":1}'), false), { type: "ignore" });
   assert.deepEqual(parseClientMessage(Buffer.from("{not json"), false), { type: "input", data: "{not json" });
   assert.deepEqual(parseClientMessage(Buffer.from("ls\r"), false), { type: "input", data: "ls\r" });
+  assert.deepEqual(parseClientMessage(Buffer.from("\x03"), false), { type: "input", data: "\x03" }, "Ctrl+C is passed through");
+  assert.deepEqual(parseClientMessage(Buffer.from("\x1b[1;5A"), false), { type: "input", data: "\x1b[1;5A" }, "modified arrows are passed through");
+  assert.deepEqual(parseClientMessage(Buffer.from([0x03]), true), { type: "input", data: "\x03" });
   assert.deepEqual(parseClientMessage(Buffer.from([0x1b, 0x5b, 0x41]), true), { type: "input", data: "\x1b[A" });
 });
 

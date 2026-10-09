@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import {
   claudeLimitsEnv,
   fccSourceBuildEnv,
   hostAgentDirs,
+  hostAgentExecutableNames,
+  installAgents,
+  isWindowsBatchCommand,
   installPlan,
   normalizeChoice,
   parsePomModels,
@@ -16,12 +22,13 @@ import {
   withOutputCeiling,
   withPomContextWindows,
   terminalKeys,
+  TerminalKeyDecoder,
 } from "../../runtime/agents.mjs";
 import { relayTarget } from "../../runtime/launcher.mjs";
 
 const manifest = { npm: { "@anthropic-ai/claude-code": "2.1.281", "@openai/codex": "0.156.1", "opencode-ai": "1.18.32" } };
 
-test("by default every agent is on, taken from this machine when it is installed there", () => {
+test("automatic first-run setup enables every agent and reuses host installs", () => {
   const detected = { codex: { path: "/opt/homebrew/bin/codex", version: "0.150.0" } };
   const choice = normalizeChoice(undefined, detected);
   assert.deepEqual(choice.agents, {
@@ -80,6 +87,42 @@ test("agents are looked for on the POM's PATH, then where their installers put t
   assert.equal(new Set(posix).size, posix.length);
   const windows = hostAgentDirs({ platform: "win32", home: "C:\\Users\\u", pathEnv: "C:\\Windows;C:\\tools" });
   assert.deepEqual(windows.slice(0, 3), ["C:\\Windows", "C:\\tools", "C:\\Users\\u\\AppData\\Roaming\\npm"]);
+  assert.ok(windows.includes("C:\\Users\\u\\.opencode\\bin"));
+  assert.deepEqual(hostAgentExecutableNames("codex", "win32"), ["codex.exe", "codex.cmd", "codex.bat"]);
+  assert.deepEqual(hostAgentExecutableNames("codex", "linux"), ["codex"]);
+  assert.equal(isWindowsBatchCommand("C:\\Users\\u\\AppData\\Roaming\\npm\\codex.cmd", "win32"), true);
+  assert.equal(isWindowsBatchCommand("/usr/bin/codex", "linux"), false);
+});
+
+test("Windows host command shims are invoked with call from the generated agent wrapper", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pom-harness-windows-shim-"));
+  try {
+    const hostCommand = join(root, "opencode.cmd");
+    writeFileSync(hostCommand, "@echo off\r\necho opencode 1.2.3\r\n");
+    await installAgents({
+      manifest: { npm: {} },
+      choice: {
+        agents: {
+          claude: { enabled: false, source: "bundled" },
+          codex: { enabled: false, source: "bundled" },
+          opencode: { enabled: true, source: "host", path: hostCommand },
+        },
+      },
+      dataDir: join(root, "data"),
+      runEnv: {},
+      nodeBin: "node.exe",
+      npmCli: "npm-cli.js",
+      binDir: join(root, "data", "bin"),
+      shim: join(root, "agent-shim.mjs"),
+      modelsPath: join(root, "models.json"),
+      windows: true,
+      log: () => {},
+    });
+    const wrapper = readFileSync(join(root, "data", "bin", "opencode.cmd"), "utf8");
+    assert.match(wrapper, /^@echo off\r\ncall ".+opencode\.cmd" %\*\r\n$/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("the stable model name wins over the per-deployment alias", () => {
@@ -239,10 +282,26 @@ test("the agent chooser reads Enter, arrows and keys however the terminal encode
   assert.deepEqual(terminalKeys("\x1b[32;57;32;1;0;1_\x1b[65;30;97;1;0;1_"), [" ", "a"]);
   assert.deepEqual(terminalKeys("\x1b[27;1;27;1;0;1_"), ["\x1b"]);
   assert.deepEqual(terminalKeys("\x1b[67;46;3;1;8;1_"), ["\x03"]);
+  assert.deepEqual(terminalKeys("\x1b[67;46;99;1;8;1_"), ["\x03"], "Ctrl+C can arrive as the printable codepoint plus a modifier");
   assert.deepEqual(terminalKeys("\x1b[16;42;0;1;16;1_"), []);
   // The kitty keyboard protocol and xterm's modifyOtherKeys.
   assert.deepEqual(terminalKeys("\x1b[13u"), ["\r"]);
   assert.deepEqual(terminalKeys("\x1b[13;1u"), ["\r"]);
   assert.deepEqual(terminalKeys("\x1b[27u"), ["\x1b"]);
+  assert.deepEqual(terminalKeys("\x1b[99;5u"), ["\x03"]);
+  assert.deepEqual(terminalKeys("\x1b[99;5:3u"), [], "key releases are ignored");
   assert.deepEqual(terminalKeys("\x1b[27;1;13~"), ["\r"]);
+  assert.deepEqual(terminalKeys("\x1b[27;5;99~"), ["\x03"]);
+  assert.deepEqual(terminalKeys("\x1b[1;5A"), ["\x1b[A"], "modified arrows remain usable in the chooser");
+
+  const decoder = new TerminalKeyDecoder();
+  assert.deepEqual(decoder.feed("\x1b[13;28;"), []);
+  assert.deepEqual(decoder.feed("13;1;0;1_"), ["\r"], "a Windows key event may span reads");
+  assert.deepEqual(decoder.feed("\x1b[1;5"), []);
+  assert.deepEqual(decoder.feed("A"), ["\x1b[A"]);
+  assert.deepEqual(decoder.feed("\r"), ["\r"]);
+  assert.deepEqual(decoder.feed("\n"), [], "split CRLF still means one Enter");
+  assert.deepEqual(decoder.feed("\x1b"), []);
+  assert.equal(decoder.waitingForEscape, true);
+  assert.deepEqual(decoder.flushEscape(), ["\x1b"]);
 });

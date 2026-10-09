@@ -49,44 +49,89 @@ export const AGENTS = [
 // --- Pure configuration helpers (unit tested) ------------------------------
 
 /**
- * Which agents to run and where each comes from, as saved by the setup screen:
- * `{ agents: { <kind>: { enabled, source: "bundled" | "host", path? } } }`.
- * Anything missing or malformed falls back to the default: every agent on,
- * from the machine when it is installed there, else the pinned release.
+ * Which agents to run and where each comes from, as saved by the optional
+ * chooser: `{ agents: { <kind>: { enabled, source: "bundled" | "host", path? } } }`.
+ * Missing or malformed entries default to every agent on, using a host install
+ * when available and otherwise the pinned release.
  */
-/**
- * The keys in one read of a raw terminal, each as the plain form the agent
- * chooser handles: printable characters, "\r" for Enter, "\x1b" for Escape,
- * "\x03" for Ctrl+C and "\x1b[A"/"\x1b[B" for the arrows. A terminal may
- * encode a key as an escape sequence instead: the Windows console's
- * win32-input-mode (ConPTY, `ESC [ Vk;Sc;Uc;Kd;Cs;Rc _`, one event per key
- * press and release), the kitty keyboard protocol (`ESC [ code u`) and
- * xterm's modifyOtherKeys (`ESC [ 27;mod;code ~`). Under the first, Enter never
- * came as "\r" and the chooser on Windows did not start the install. Key
- * releases and keys with no plain form are dropped.
- */
+function terminalCharacter(code, modifiers = 1) {
+  if (!Number.isSafeInteger(code) || code <= 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) return undefined;
+  // Kitty and modifyOtherKeys encode modifiers as a one-based bit mask; Ctrl is bit 2.
+  if (((modifiers - 1) & 4) !== 0) {
+    if (code >= 65 && code <= 90) return String.fromCodePoint(code - 64);
+    if (code >= 97 && code <= 122) return String.fromCodePoint(code - 96);
+    if (code >= 64 && code <= 95) return String.fromCodePoint(code - 64);
+    if (code === 32 || code === 50) return "\x00";
+    if (code === 63) return "\x7f";
+  }
+  return code === 10 || code === 13 ? "\r" : String.fromCodePoint(code);
+}
+
+/** Decode Windows ConPTY, kitty and xterm modifyOtherKeys events to ordinary keys. */
 export function terminalKeys(data) {
-  const plain = (code) => (code === 10 ? "\r" : code > 0 ? String.fromCodePoint(code) : undefined);
   const keys = [];
-  for (const token of data.match(/\x1b\[[0-9;?]*[A-Za-z~_]|\x1bO[A-Za-z]|\x1b|\r\n|[\s\S]/g) ?? []) {
+  for (const token of data.match(/\x1b\[[0-9;?:<=>]*[A-Za-z~_]|\x1bO[A-Za-z]|\x1b|\r\n|[\s\S]/g) ?? []) {
     const win32 = /^\x1b\[(\d*);(\d*);(\d*);(\d*);(\d*);(\d*)_$/.exec(token);
-    const kitty = /^\x1b\[(\d+)(?:;\d+(?::\d+)?)*u$/.exec(token);
-    const other = /^\x1b\[27;\d+;(\d+)~$/.exec(token);
+    const kitty = /^\x1b\[(\d+)(?::\d+)*(?:;(\d+)(?::(\d+))?)?u$/.exec(token);
+    const other = /^\x1b\[27;(\d+);(\d+)~$/.exec(token);
+    const arrow = /^\x1b\[(?:1(?:;\d+)?)?([ABCD])$/.exec(token);
     let key = token;
     if (win32) {
-      const [virtualKey, , unicode, down] = win32.slice(1, 5).map(Number);
+      const [virtualKey, , unicode, down, controlState] = win32.slice(1).map(Number);
       if (down !== 1) continue;
-      key = virtualKey === 38 ? "\x1b[A" : virtualKey === 40 ? "\x1b[B" : plain(unicode);
+      const arrows = { 37: "D", 38: "A", 39: "C", 40: "B" };
+      key = arrows[virtualKey]
+        ? `\x1b[${arrows[virtualKey]}`
+        : terminalCharacter(unicode, controlState & 0x000c ? 5 : 1);
     } else if (kitty) {
-      key = plain(Number(kitty[1]));
+      if (Number(kitty[3] ?? 1) === 3) continue;
+      key = terminalCharacter(Number(kitty[1]), Number(kitty[2] ?? 1));
     } else if (other) {
-      key = plain(Number(other[1]));
+      key = terminalCharacter(Number(other[2]), Number(other[1]));
+    } else if (arrow) {
+      key = `\x1b[${arrow[1]}`;
     } else if (token === "\n" || token === "\r\n") {
       key = "\r";
     }
     if (key !== undefined) keys.push(key);
   }
   return keys;
+}
+
+/** Preserve escape sequences split across separate stdin data events. */
+export class TerminalKeyDecoder {
+  pending = "";
+  suppressLineFeed = false;
+
+  feed(data) {
+    let input = this.pending + String(data);
+    this.pending = "";
+    const escape = input.lastIndexOf("\x1b");
+    if (escape >= 0) {
+      const suffix = input.slice(escape);
+      if (/^\x1b(?:\[|O)?$/.test(suffix) || /^\x1b\[[0-9;?:<=>]*$/.test(suffix)) {
+        this.pending = suffix;
+        input = input.slice(0, escape);
+      }
+    }
+    if (this.suppressLineFeed) {
+      if (input.startsWith("\n")) input = input.slice(1);
+      this.suppressLineFeed = false;
+    }
+    const keys = terminalKeys(input);
+    if (input.endsWith("\r")) this.suppressLineFeed = true;
+    return keys;
+  }
+
+  flushEscape() {
+    if (this.pending !== "\x1b") return [];
+    this.pending = "";
+    return ["\x1b"];
+  }
+
+  get waitingForEscape() {
+    return this.pending === "\x1b";
+  }
 }
 
 export function normalizeChoice(raw, detected) {
@@ -492,7 +537,14 @@ export function hostAgentDirs({ platform, home, pathEnv }) {
   const paths = windows ? path.win32 : path.posix;
   const fromPath = (pathEnv ?? "").split(windows ? ";" : ":").filter(Boolean);
   const extra = windows
-    ? [paths.join(home, "AppData", "Roaming", "npm"), paths.join(home, ".local", "bin"), paths.join(home, ".bun", "bin")]
+    ? [
+        paths.join(home, "AppData", "Roaming", "npm"),
+        paths.join(home, ".local", "bin"),
+        paths.join(home, ".claude", "local"),
+        paths.join(home, ".opencode", "bin"),
+        paths.join(home, ".bun", "bin"),
+        paths.join(home, ".volta", "bin"),
+      ]
     : [
         paths.join(home, ".local", "bin"),
         paths.join(home, ".claude", "local"),
@@ -504,6 +556,15 @@ export function hostAgentDirs({ platform, home, pathEnv }) {
         "/usr/local/bin",
       ];
   return [...new Set([...fromPath, ...extra])];
+}
+
+/** Windows npm installs expose command shims as .cmd/.bat as well as native .exe files. */
+export function hostAgentExecutableNames(kind, platform) {
+  return platform === "win32" ? [`${kind}.exe`, `${kind}.cmd`, `${kind}.bat`] : [kind];
+}
+
+export function isWindowsBatchCommand(file, platform) {
+  return platform === "win32" && /\.(?:cmd|bat)$/i.test(file);
 }
 
 /** How to run an installed command: npm's JavaScript entry points run on the bundled Node. */
@@ -522,35 +583,53 @@ function hostCommand(file, nodeBin) {
  * plugin: `{ <kind>: { path, version } }`. A command counts only when
  * `--version` answers with a version, so a broken leftover is not offered.
  */
-export async function detectHostAgents({ platform, home, pathEnv, nodeBin, exclude }) {
+export async function detectHostAgents({ platform, home, pathEnv, nodeBin, exclude, baseEnv = {} }) {
   const dirs = hostAgentDirs({ platform, home, pathEnv });
   const nvm = join(home, ".nvm", "versions", "node");
   if (platform !== "win32" && existsSync(nvm)) {
     for (const version of readdirSync(nvm)) dirs.push(join(nvm, version, "bin"));
   }
+  const commandEnv = { PATH: pathEnv ?? "", HOME: home };
+  if (platform === "win32") {
+    commandEnv.USERPROFILE = home;
+    for (const key of ["SystemRoot", "SYSTEMROOT", "ComSpec", "COMSPEC", "TEMP", "TMP"]) {
+      if (baseEnv[key]) commandEnv[key] = baseEnv[key];
+    }
+  }
   const found = {};
   for (const { kind } of AGENTS) {
     for (const dir of dirs) {
-      const candidate = join(dir, platform === "win32" ? `${kind}.exe` : kind);
-      let file;
-      try {
-        file = realpathSync(candidate);
-        if (!statSync(file).isFile()) continue;
-      } catch {
-        continue;
+      for (const name of hostAgentExecutableNames(kind, platform)) {
+        const candidate = join(dir, name);
+        let file;
+        try {
+          file = realpathSync(candidate);
+          if (!statSync(file).isFile()) continue;
+        } catch {
+          continue;
+        }
+        if (exclude.some((root) => file.startsWith(root))) continue;
+        const [command, ...prefix] = hostCommand(file, nodeBin);
+        const commandIsBatch = isWindowsBatchCommand(command, platform);
+        const output = await new Promise((resolve) => {
+          execFile(
+            command,
+            [...prefix, "--version"],
+            {
+              timeout: 15_000,
+              env: commandEnv,
+              ...(commandIsBatch ? { shell: baseEnv.ComSpec || baseEnv.COMSPEC || "cmd.exe" } : {}),
+            },
+            (error, stdout, stderr) => resolve(error ? undefined : `${stdout}${stderr}`),
+          );
+        });
+        const version = output?.match(/\d+\.\d+\.\d+[\w.+-]*/)?.[0];
+        if (!version) continue;
+        // The command as found (often a link its installer moves on update), not where it points today.
+        found[kind] = { path: candidate, version };
+        break;
       }
-      if (exclude.some((root) => file.startsWith(root))) continue;
-      const [command, ...prefix] = hostCommand(file, nodeBin);
-      const output = await new Promise((resolve) => {
-        execFile(command, [...prefix, "--version"], { timeout: 15_000, env: { PATH: pathEnv ?? "", HOME: home } }, (error, stdout) =>
-          resolve(error ? undefined : stdout),
-        );
-      });
-      const version = output?.match(/\d+\.\d+\.\d+[\w.+-]*/)?.[0];
-      if (!version) continue;
-      // The command as found (often a link its installer moves on update), not where it points today.
-      found[kind] = { path: candidate, version };
-      break;
+      if (found[kind]) break;
     }
   }
   return found;
@@ -655,6 +734,7 @@ export async function installAgents(context) {
   const realBin = join(agentsRoot, "real-bin");
   const sep = windows ? ";" : ":";
   const quoted = (parts) => parts.map((part) => `"${part}"`).join(" ");
+  const windowsInvocation = (parts) => `${/\.(?:cmd|bat)$/i.test(parts[0]) ? "call " : ""}${quoted(parts)} %*`;
   for (const agent of AGENTS) {
     const chosen = choice.agents[agent.kind];
     if (!chosen.enabled) {
@@ -665,7 +745,7 @@ export async function installAgents(context) {
     const command = chosen.source === "host" ? hostCommand(chosen.path, nodeBin) : bundled[agent.kind]();
     if (!command.every((part) => part && existsSync(part))) throw new Error(`${agent.label} is missing after install`);
     if (!agent.viaFcc) {
-      writeWrapper(binDir, agent.kind, windows, `exec ${quoted(command)} "$@"`, `${quoted(command)} %*`);
+      writeWrapper(binDir, agent.kind, windows, `exec ${quoted(command)} "$@"`, windowsInvocation(command));
       continue;
     }
     const line = quoted([nodeBin, shim, agent.kind, modelsPath, ...command]);

@@ -16,7 +16,7 @@ import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { constants, homedir } from "node:os";
 import { join } from "node:path";
-import { claudeLimitsEnv, withPomContextWindows } from "./agents.mjs";
+import { claudeLimitsEnv, isWindowsBatchCommand, withPomContextWindows } from "./agents.mjs";
 
 const [kind, modelsPath, command, ...args] = process.argv.slice(2);
 
@@ -79,7 +79,12 @@ if (kind === "claude") {
 // The client owns the terminal: Ctrl+C reaches it through the process group,
 // so the shim only waits and hands back its exit status.
 for (const signal of ["SIGINT", "SIGQUIT"]) process.on(signal, () => {});
-const child = spawn(command, finalArgs, { stdio: "inherit", env });
+const batchCommand = isWindowsBatchCommand(command, process.platform);
+const child = spawn(command, finalArgs, {
+  stdio: "inherit",
+  env,
+  ...(batchCommand ? { shell: env.ComSpec || env.COMSPEC || "cmd.exe" } : {}),
+});
 for (const signal of ["SIGTERM", "SIGHUP"]) process.on(signal, () => child.kill(signal));
 child.on("error", (error) => {
   process.stderr.write(`${kind}: ${error.message}\n`);

@@ -22,7 +22,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, unwatchFile, watchFile, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, unwatchFile, watchFile, writeFileSync } from "node:fs";
 import http from "node:http";
 import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
@@ -638,16 +638,18 @@ async function openAgentTabs(runEnv, kinds) {
   }
 }
 
-/** The "Setup" tab running `pom-agents`, focused so it is the first thing the user sees. */
-async function openSetupTab(runEnv) {
+async function closeLegacySetupTabs(runEnv) {
   const pom = await pomWorkspace(runEnv);
-  if (!pom) return undefined;
-  const tab = await herdrJson(runEnv, ["tab", "create", "--workspace", pom.workspace_id, "--cwd", workspace, "--label", "Setup", "--focus"]);
-  await herdr(runEnv, ["pane", "run", tab.root_pane.pane_id, "pom-agents"]);
-  return tab.root_pane.tab_id;
+  if (!pom) return;
+  const listed = await herdrJson(runEnv, ["tab", "list"]);
+  for (const tab of listed.tabs ?? []) {
+    if (tab.workspace_id === pom.workspace_id && tab.label === "Setup") {
+      await herdr(runEnv, ["tab", "close", tab.tab_id]).catch((error) => log(error.message));
+    }
+  }
 }
 
-/** `pom-agents` on the panes' PATH opens the agent chooser (`agent-setup.mjs`). */
+/** `pom-agents` on the panes' PATH lets the user adjust the automatic default. */
 function writeSetupCommand() {
   const setup = join(here, "agent-setup.mjs");
   if (isWindows) {
@@ -664,10 +666,9 @@ function writeAgentsStatus(savedAt, state, message) {
 }
 
 /**
- * Claude Code, Codex and opencode next to pi, as the user chooses them. The
- * first time, a "Setup" tab asks (everything checked; agents already on this
- * machine are used from there). Each saved choice is then installed, wired to
- * the POM and opened in its own tab; `pom-agents` changes it later.
+ * Claude Code, Codex and opencode next to pi. On first use all are selected
+ * automatically: working host installs are reused, missing ones are bundled
+ * from the pinned releases. `pom-agents` remains available for later changes.
  */
 async function startAgents(runEnv, terminalPort, models) {
   const manifest = readJson(agentsManifestPath, undefined);
@@ -681,11 +682,21 @@ async function startAgents(runEnv, terminalPort, models) {
     pathEnv: env.PATH,
     nodeBin,
     exclude: [dataDir, here],
+    baseEnv: env,
   });
   const found = Object.entries(detected).map(([kind, host]) => `${kind} ${host.version} (${host.path})`);
   log(found.length > 0 ? `already on this machine: ${found.join(", ")}` : "no agent installed on this machine");
   writeFileSync(agentsDetectedPath, `${JSON.stringify({ detected, versions: manifest.npm, home: homedir() }, null, 2)}\n`);
   writeSetupCommand();
+  const existingChoice = readJson(agentsChoicePath, undefined);
+  if (!existingChoice || typeof existingChoice.savedAt !== "string") {
+    await closeLegacySetupTabs(runEnv).catch((error) => log(`old setup tab: ${error.message}`));
+    const savedAt = new Date().toISOString();
+    const choice = normalizeChoice(undefined, detected);
+    writeFileSync(`${agentsChoicePath}.tmp`, `${JSON.stringify({ savedAt, agents: choice.agents }, null, 2)}\n`);
+    renameSync(`${agentsChoicePath}.tmp`, agentsChoicePath);
+    log("selecting Claude Code, Codex and opencode automatically");
+  }
 
   const context = {
     home,
@@ -697,7 +708,6 @@ async function startAgents(runEnv, terminalPort, models) {
   };
   let latestModels = models;
   let fcc;
-  let setupTab;
   let applied;
   let queue = Promise.resolve();
 
@@ -741,10 +751,6 @@ async function startAgents(runEnv, terminalPort, models) {
       const labels = AGENTS.filter((agent) => kinds.includes(agent.kind)).map((agent) => agent.label);
       log(labels.length > 0 ? `${labels.join(", ")} ready${fcc ? ` (FCC on 127.0.0.1:${context.fccPort})` : ""}` : "only pi chosen");
       writeAgentsStatus(saved.savedAt, "ready", labels.length > 0 ? `Ready: ${labels.join(", ")}.` : "Done.");
-      if (setupTab) {
-        await herdr(runEnv, ["tab", "close", setupTab]).catch((error) => log(error.message));
-        setupTab = undefined;
-      }
     } catch (error) {
       log(`agents unavailable: ${error.message}`);
       writeAgentsStatus(saved.savedAt, "error", `Could not set up the agents: ${error.message}`);
@@ -755,7 +761,6 @@ async function startAgents(runEnv, terminalPort, models) {
   };
   watchFile(agentsChoicePath, { interval: 1000 }, schedule);
   if (existsSync(agentsChoicePath)) schedule();
-  else setupTab = await openSetupTab(runEnv).catch((error) => log(`agent setup tab: ${error.message}`));
 
   return {
     modelsChanged(nextModels) {

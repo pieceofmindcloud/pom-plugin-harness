@@ -1,16 +1,15 @@
-// `pom-agents`: choose which agents run next to pi.
+// `pom-agents`: optionally change which agents run next to pi.
 //
 //   node agent-setup.mjs <data dir>
 //
-// The launcher opens it in a "Setup" tab the first time and it can be run from
-// any pane later. It reads what the launcher found (`agents-detected.json`:
-// agents already installed on this machine and the pinned versions), saves the
-// choice to `agents-choice.json`, then follows `agents-status.json` while the
-// launcher installs and opens a tab per agent.
+// The launcher installs all agents automatically on first use. This chooser is
+// available from any pane afterward; it reads the launcher's detected host
+// installs and pinned versions, saves `agents-choice.json`, then follows
+// `agents-status.json` while the launcher applies the change.
 
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { AGENTS, normalizeChoice, terminalKeys } from "./agents.mjs";
+import { AGENTS, normalizeChoice, TerminalKeyDecoder } from "./agents.mjs";
 
 const dataDir = process.argv[2];
 const detectedPath = join(dataDir, "agents-detected.json");
@@ -60,6 +59,7 @@ function fit(text, width) {
 }
 
 let cursor = 0;
+let escapeTimer;
 function render() {
   const lines = [
     "",
@@ -116,7 +116,17 @@ function restoreTerminal() {
   process.stdout.write(`${ESC}?25h`);
 }
 
+function cancel() {
+  clearTimeout(escapeTimer);
+  process.off("SIGINT", cancel);
+  restoreTerminal();
+  process.stdout.write(`${ESC}2J${ESC}H\n Nothing changed. Run ${bold("pom-agents")} to choose later.\n\n`);
+  process.exit(0);
+}
+
 function finish() {
+  clearTimeout(escapeTimer);
+  process.off("SIGINT", cancel);
   restoreTerminal();
   process.stdin.pause();
   const enabled = AGENTS.filter((agent) => choice.agents[agent.kind].enabled).map((agent) => agent.label);
@@ -128,12 +138,26 @@ function finish() {
 if (!process.stdin.isTTY) {
   follow(save());
 } else {
+  process.once("SIGINT", cancel);
   process.stdin.setRawMode(true);
   process.stdin.setEncoding("utf8");
-  // One read can carry several keys (fast typing, a paste): handle each in turn.
+  const decoder = new TerminalKeyDecoder();
+  const handleKeys = (keys) => {
+    for (const key of keys) {
+      if (onKey(key) === "done") return true;
+    }
+    return false;
+  };
+  // Reads may split escape sequences; a lone Escape is flushed after a short
+  // delay so it remains usable without mistaking the start of a key sequence.
   process.stdin.on("data", (data) => {
-    for (const key of terminalKeys(data)) {
-      if (onKey(key) === "done") return;
+    clearTimeout(escapeTimer);
+    if (handleKeys(decoder.feed(data))) return;
+    if (decoder.waitingForEscape) {
+      escapeTimer = setTimeout(() => {
+        if (handleKeys(decoder.flushEscape())) return;
+        render();
+      }, 35);
     }
     render();
   });
@@ -155,9 +179,8 @@ if (!process.stdin.isTTY) {
       finish();
       return "done";
     } else if (key === "q" || key === "\x1b" || key === "\x03") {
-      restoreTerminal();
-      process.stdout.write(`${ESC}2J${ESC}H\n Nothing changed. Run ${bold("pom-agents")} to choose later.\n\n`);
-      process.exit(0);
+      cancel();
+      return "done";
     }
     return undefined;
   };
