@@ -167,12 +167,38 @@ function pickShell() {
 function writePiWrapper() {
   mkdirSync(binDir, { recursive: true });
   if (isWindows) {
-    writeFileSync(join(binDir, "pi.cmd"), `@"${nodeBin}" "${piCli}" %*\r\n`);
+    writeFileSync(join(binDir, "pi.cmd"), `@set "CHROME_DEVTOOLS_AXI_SESSION=pi"\r\n@"${nodeBin}" "${piCli}" %*\r\n`);
     return;
   }
   const path = join(binDir, "pi");
-  writeFileSync(path, `#!/bin/sh\nexec "${nodeBin}" "${piCli}" "$@"\n`);
+  writeFileSync(path, `#!/bin/sh\nCHROME_DEVTOOLS_AXI_SESSION=pi exec "${nodeBin}" "${piCli}" "$@"\n`);
   chmodSync(path, 0o755);
+}
+
+/** Install the browser-verification skill in the private homes of all agents. */
+function installBrowserSkills() {
+  const version = readJson(agentsManifestPath, undefined)?.npm?.["chrome-devtools-axi"];
+  if (!version) return;
+  const skill = browserSkillForVersion(readFileSync(join(here, "browser-skill.md"), "utf8"), version);
+  const targets = [
+    join(home, ".agents", "skills", "pom-harness-browser-verify", "SKILL.md"),
+    join(home, ".claude", "skills", "pom-harness-browser-verify", "SKILL.md"),
+  ];
+  for (const target of targets) {
+    mkdirSync(dirname(target), { recursive: true });
+    let current;
+    try {
+      current = readFileSync(target, "utf8");
+    } catch {
+      // First install.
+    }
+    if (current === skill) continue;
+    if (current && !current.includes("author: POM Harness")) {
+      log(`kept existing skill at ${target}`);
+      continue;
+    }
+    writeFileSync(target, skill);
+  }
 }
 
 /**
@@ -393,6 +419,10 @@ async function waitForServer(runEnv) {
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   throw new Error("herdr server did not start");
+}
+
+export function browserSkillForVersion(template, version) {
+  return template.replaceAll("@AXI_VERSION@", version);
 }
 
 /** Whether a workspace whose panes run in `cwd` must be made again in `target`. */
@@ -789,6 +819,7 @@ async function main() {
   const shell = pickShell();
   const runEnv = privateEnv({ base: env, home, binDir, herdrBin, shell, apiKey: llmApiKey, socket });
   writePiWrapper();
+  installBrowserSkills();
   writeWindowsPaneShell(shell, runEnv);
   if (runEnv.LOCALAPPDATA) mkdirSync(runEnv.LOCALAPPDATA, { recursive: true });
   writeHerdrConfig(runEnv.HERDR_CONFIG_PATH, shell);

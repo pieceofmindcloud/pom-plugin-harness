@@ -126,7 +126,7 @@ test("Windows host command shims are invoked with call from the generated agent 
       log: () => {},
     });
     const wrapper = readFileSync(join(root, "data", "bin", "opencode.cmd"), "utf8");
-    assert.match(wrapper, /^@echo off\r\ncall ".+opencode\.cmd" %\*\r\n$/);
+    assert.match(wrapper, /^@echo off\r\nset "CHROME_DEVTOOLS_AXI_SESSION=opencode"\r\ncall ".+opencode\.cmd" %\*\r\n$/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

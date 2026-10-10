@@ -1,6 +1,6 @@
 # Project agent memory
 
-- This plugin is a shell around the official herdr GitHub release, the `@earendil-works/pi-coding-agent` npm release and, on first use, the pinned Claude Code, Codex, opencode and free-claude-code releases (`agents.json`); never vendor their source. `README.md` has the architecture, verification and known limitations.
+- This plugin is a shell around the official herdr GitHub release, the `@earendil-works/pi-coding-agent` npm release, pinned agents/FCC releases and the pinned `chrome-devtools-axi` npm CLI (`agents.json`); never vendor their source. `runtime/browser-skill.md` is the POM-owned skill that exposes it to agents. `README.md` has the architecture, verification and known limitations.
 - Agent configs are shared with the user: only write plugin-owned entries (the `pom` provider, FCC's connection keys, defaults while unset) and keep every other line. Helpers for them are pure and unit tested in `runtime/agents.mjs`.
 - Every agent needs the POM's per-model `context_length`/`max_tokens`; check what a new agent or FCC version reads (its source, or the mock's `GET /__mock/requests`) instead of assuming.
 - The POM owns the model endpoint, the API key (`host.configure`) and browser access (its admin-only `/api/ui/plugins/:code/proxy/*` route, reached through `ui.upstream`); the node side lives in the `pom` repository. Never add an env var or build input for them here.

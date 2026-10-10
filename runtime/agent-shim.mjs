@@ -65,7 +65,7 @@ function codexArgs(models) {
 }
 
 const models = readModels();
-const env = { ...process.env };
+const env = { ...process.env, CHROME_DEVTOOLS_AXI_SESSION: kind };
 let finalArgs = args;
 if (kind === "claude") {
   const home = env.HOME ?? homedir();

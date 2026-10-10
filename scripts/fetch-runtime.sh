@@ -156,7 +156,7 @@ if [[ -d "$stage/app/node_modules/node-pty/prebuilds" ]]; then
 fi
 find "$stage/app/node_modules" -name '*.d.ts' -type f -delete
 
-cp "$root/runtime/launcher.mjs" "$root/runtime/agents.mjs" "$root/runtime/agent-shim.mjs" "$root/runtime/agent-setup.mjs" "$stage/"
+cp "$root/runtime/launcher.mjs" "$root/runtime/agents.mjs" "$root/runtime/agent-shim.mjs" "$root/runtime/agent-setup.mjs" "$root/runtime/browser-skill.md" "$stage/"
 
 # Agents installed on first use, pinned here.
 npm_exact() {
@@ -168,6 +168,7 @@ npm_exact() {
 opencode_resolved="$(npm_exact opencode-ai "$opencode_version")"
 claude_resolved="$(npm_exact @anthropic-ai/claude-code "$claude_version")"
 codex_resolved="$(npm_exact @openai/codex "$codex_version")"
+chrome_devtools_axi_resolved="$(npm_exact chrome-devtools-axi latest)"
 uv_api="https://api.github.com/repos/astral-sh/uv/releases"
 if [[ "$uv_version" == latest ]]; then uv_url_api="${uv_api}/latest"; else uv_url_api="${uv_api}/tags/${uv_version}"; fi
 uv_release="$(curl -fsSL -H 'Accept: application/vnd.github+json' ${GITHUB_TOKEN:+-H "Authorization: Bearer ${GITHUB_TOKEN}"} "$uv_url_api")"
@@ -180,10 +181,10 @@ fcc_commit="$(curl -fsSL -H 'Accept: application/vnd.github+json' ${GITHUB_TOKEN
 [[ "$fcc_commit" =~ ^[0-9a-f]{40}$ ]] || die "could not resolve free-claude-code ${fcc_ref}"
 jq -n \
   --arg opencode "$opencode_resolved" --arg claude "$claude_resolved" --arg codex "$codex_resolved" \
-  --arg uv_version "$uv_resolved" --arg uv_asset "$uv_asset" --arg uv_url "$uv_url" --arg uv_sha "${uv_digest#sha256:}" \
+  --arg chrome_devtools_axi "$chrome_devtools_axi_resolved" --arg uv_version "$uv_resolved" --arg uv_asset "$uv_asset" --arg uv_url "$uv_url" --arg uv_sha "${uv_digest#sha256:}" \
   --arg fcc_commit "$fcc_commit" --arg fcc_python "$fcc_python" \
   '{
-    npm: {"opencode-ai": $opencode, "@anthropic-ai/claude-code": $claude, "@openai/codex": $codex},
+    npm: {"opencode-ai": $opencode, "@anthropic-ai/claude-code": $claude, "@openai/codex": $codex, "chrome-devtools-axi": $chrome_devtools_axi},
     uv: {version: $uv_version, asset: $uv_asset, url: $uv_url, sha256: $uv_sha},
     fcc: {commit: $fcc_commit, python: $fcc_python,
           url: ("https://github.com/Alishahryar1/free-claude-code/archive/" + $fcc_commit + ".zip")}
@@ -201,5 +202,5 @@ checksum="$(sha256 "$archive")"
 printf '%s\n' "$checksum" > "${archive}.sha256"
 printf 'archive=%s\nsha256=%s\npi_version=%s\nherdr_version=%s\nnode_version=%s\nsize=%s\n' \
   "$archive" "$checksum" "$pi_resolved" "$herdr_resolved" "$node_version" "$size"
-printf 'opencode_version=%s\nclaude_code_version=%s\ncodex_version=%s\nuv_version=%s\nfcc_commit=%s\n' \
-  "$opencode_resolved" "$claude_resolved" "$codex_resolved" "$uv_resolved" "$fcc_commit"
+printf 'opencode_version=%s\nclaude_code_version=%s\ncodex_version=%s\nchrome_devtools_axi_version=%s\nuv_version=%s\nfcc_commit=%s\n' \
+  "$opencode_resolved" "$claude_resolved" "$codex_resolved" "$chrome_devtools_axi_resolved" "$uv_resolved" "$fcc_commit"

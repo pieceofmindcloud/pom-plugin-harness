@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
+  browserSkillForVersion,
   herdrConfig,
   windowsPaneShell,
   withDefaultShell,
@@ -14,6 +16,13 @@ import {
   withTrustedFolder,
   workspaceMoved,
 } from "../../runtime/launcher.mjs";
+
+test("the browser skill pins the CLI version built into the runtime", () => {
+  const template = readFileSync(new URL("../../runtime/browser-skill.md", import.meta.url), "utf8");
+  const skill = browserSkillForVersion(template, "0.1.39");
+  assert.doesNotMatch(skill, /@AXI_VERSION@/);
+  assert.equal((skill.match(/chrome-devtools-axi@0\.1\.39/g) ?? []).length, 3);
+});
 
 test("a workspace restored in another folder than the POM's is made again there", () => {
   assert.equal(workspaceMoved("/data/harness/data/workspace", "/data/home/pom_workspace"), true);

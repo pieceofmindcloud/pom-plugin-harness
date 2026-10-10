@@ -753,7 +753,13 @@ export async function installAgents(context) {
     const command = chosen.source === "host" ? hostCommand(chosen.path, nodeBin) : bundled[agent.kind]();
     if (!command.every((part) => part && existsSync(part))) throw new Error(`${agent.label} is missing after install`);
     if (!agent.viaFcc) {
-      writeWrapper(binDir, agent.kind, windows, `exec ${quoted(command)} "$@"`, windowsInvocation(command));
+      writeWrapper(
+        binDir,
+        agent.kind,
+        windows,
+        `CHROME_DEVTOOLS_AXI_SESSION=${agent.kind} exec ${quoted(command)} "$@"`,
+        `set "CHROME_DEVTOOLS_AXI_SESSION=${agent.kind}"\r\n${windowsInvocation(command)}`,
+      );
       continue;
     }
     const line = quoted([nodeBin, shim, agent.kind, modelsPath, ...command]);

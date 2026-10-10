@@ -16,7 +16,7 @@ stage="$root/build/runtime-$platform"
   exit 2
 }
 
-scripts=(launcher.mjs agents.mjs agent-shim.mjs agent-setup.mjs)
+scripts=(launcher.mjs agents.mjs agent-shim.mjs agent-setup.mjs browser-skill.md)
 excludes=()
 for name in "${scripts[@]}"; do excludes+=("--exclude=./$name"); done
 archive="$out/runtime-$platform.tar.gz"
