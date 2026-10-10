@@ -1,6 +1,7 @@
 {
   "schema": "pom-plugin-ui/v1",
   "plugin_code": "harness",
+  "lifecycle": "on_demand",
   "icon_image": "ui/icon.png",
   "documentation": {
     "guides": [
