@@ -9,6 +9,7 @@
 - The plugin host uses its own stdin/stdout for IPC: processes the library starts must never inherit them (`src/supervisor.rs`).
 - `scripts/build.sh` runs `scripts/fetch-runtime.sh` and passes `HARNESS_RUNTIME_ARCHIVE` to cargo; without it the library builds but reports that no runtime is bundled.
 - The POM's local development rebuild runs the `development.rebuild` steps of `ui/manifest.json` (`scripts/dev-ui.sh`, `scripts/dev-runtime.sh`) with the source read-only: they write to `POM_PLUGIN_OUT_DIR`, and `build.rs` takes the UI and the runtime archive from there. `dev-runtime.sh` repacks `build/runtime-<platform>` with this source's runtime scripts, so `scripts/fetch-runtime.sh` must have run once on that machine.
+- `ui/src/host/ready.ts` - the "finished rendering" signal the POM waits for (host version 6, `__POM_HOST__.ready()`). The host mounts the screen hidden (`.pom-plugin-pending`) under its pieces animation and opens it when the signal arrives or its short wait ends, so a plugin without the signal keeps working. `useScreenReady(ready)` sends it once per mount, when the terminal is up or a failure to show has settled in `Terminal` - not on the first render. An older host has no `ready`: the call is skipped.
 - Checks: `cargo test`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `node --test tests/unit/*.test.mjs` (Node 22 needs `--experimental-strip-types`). When `cargo` resolves to a wrapper, use `~/.cargo/bin/cargo`.
 
 ## Maintaining this file

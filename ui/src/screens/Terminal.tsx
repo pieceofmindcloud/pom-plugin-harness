@@ -3,6 +3,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getPluginAsset, usePluginI18n } from "../host/runtime";
+import { useScreenReady } from "../host/ready";
 import { resizeMessage, terminalUrl } from "../terminal/connection";
 
 /** `ui/runtime.json`: whether herdr and pi are up. The POM proxy knows where. */
@@ -46,6 +47,11 @@ export function Terminal() {
   const [phase, setPhase] = useState<Phase>({ kind: "starting" });
   const [attempt, setAttempt] = useState(0);
   const retry = useCallback(() => setAttempt((value) => value + 1), []);
+
+  // The terminal itself is the content of this screen: the host opens it when
+  // the socket is up or a failure to show has settled, not over the
+  // starting/connecting spinner.
+  useScreenReady(phase.kind === "connected" || phase.kind === "disconnected" || phase.kind === "error");
 
   useEffect(() => {
     const controller = new AbortController();
