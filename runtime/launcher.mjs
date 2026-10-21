@@ -616,9 +616,21 @@ async function openAgentTabs(runEnv, kinds) {
     if (!pane) throw new Error(`${agent.label} tab has no pane`);
     if (!active.has(pane)) toStart.push({ agent, pane });
   }
-  await Promise.all(toStart.map(({ agent, pane }) => herdrJson(runEnv, [
-    "agent", "start", agent.kind, "--kind", agent.kind, "--pane", pane, "--timeout", "60000",
-  ])));
+  await Promise.all(toStart.map(async ({ agent, pane }) => {
+    // A newly created Windows pane may still be starting PowerShell. Wait for
+    // herdr to recognize its shell before handing it the agent command.
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await herdrJson(runEnv, [
+          "agent", "start", agent.kind, "--kind", agent.kind, "--pane", pane, "--timeout", "60000",
+        ]);
+        return;
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.includes("agent_pane_busy") || attempt >= 19) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    }
+  }));
 }
 
 async function closeLegacyTabs(runEnv) {
