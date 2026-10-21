@@ -540,6 +540,10 @@ function startTerminalServer(runEnv) {
       response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(listWorkspaceProjects(workspaceRoot)));
       return;
     }
+    if (request.method === "GET" && pathname === "/agents") {
+      response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(readJson(agentsStatusPath, { state: existsSync(agentsManifestPath) ? "installing" : "ready" })));
+      return;
+    }
     response.writeHead(404).end();
   });
 

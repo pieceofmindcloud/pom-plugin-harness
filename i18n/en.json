@@ -7,5 +7,7 @@
   "reconnect": "Reconnect",
   "retry": "Try again",
   "copy": "Copy",
-  "copyPending": "Clipboard blocked. Try Copy or Shift+drag, then Ctrl+C."
+  "copyPending": "Clipboard blocked. Try Copy or Shift+drag, then Ctrl+C.",
+  "agentInstalling": "Setting up OpenCode. Its tab will appear when ready.",
+  "agentFailed": "OpenCode could not start. Run pom-agents in a pane to retry."
 }

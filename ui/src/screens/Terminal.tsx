@@ -5,10 +5,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getPluginAsset, usePluginI18n } from "../host/runtime";
 import { useScreenReady } from "../host/ready";
 import { clipboardShortcut, copyTerminalText, osc52Text } from "../terminal/clipboard";
-import { resizeMessage, terminalUrl } from "../terminal/connection";
+import { PROXY_PREFIX, resizeMessage, terminalUrl } from "../terminal/connection";
 
 /** `ui/runtime.json`: whether herdr and pi are up. The POM proxy knows where. */
 type RuntimeStatus = { status: "ready" } | { status: "starting" } | { status: "error"; error: string };
+type AgentsStatus = { state: "installing" | "ready" | "error"; message?: string };
 
 type Phase =
   | { kind: "starting" }
@@ -47,13 +48,14 @@ export function Terminal() {
   const host = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<XTerm | null>(null);
   const [pendingCopy, setPendingCopy] = useState<string | null>(null);
+  const [agentsStatus, setAgentsStatus] = useState<AgentsStatus | null>(null);
   const [phase, setPhase] = useState<Phase>({ kind: "starting" });
   const [attempt, setAttempt] = useState(0);
   const retry = useCallback(() => setAttempt((value) => value + 1), []);
 
-  // The terminal itself is the content of this screen: the host opens it when
-  // the socket is up or a failure to show has settled, not over the
-  // starting/connecting spinner.
+  // The terminal itself is the content of this screen: the host opens it after
+  // herdr first renders, or when a failure to show has settled, not while the
+  // socket is connected but its client is still attaching.
   useScreenReady(phase.kind === "connected" || phase.kind === "disconnected" || phase.kind === "error");
 
   useEffect(() => {
@@ -61,6 +63,7 @@ export function Terminal() {
     const cleanup: Array<() => void> = [];
     setPhase({ kind: "starting" });
     setPendingCopy(null);
+    setAgentsStatus(null);
 
     waitUntilReady(controller.signal)
       .then(() => {
@@ -131,12 +134,15 @@ export function Terminal() {
         const socket = new WebSocket(terminalUrl(term.cols, term.rows));
         socket.binaryType = "arraybuffer";
         cleanup.push(() => socket.close());
-        socket.onopen = () => {
-          setPhase({ kind: "connected" });
-          term.focus();
-        };
+        let rendered = false;
         socket.onmessage = (event) => {
-          term.write(typeof event.data === "string" ? event.data : new Uint8Array(event.data as ArrayBuffer));
+          term.write(typeof event.data === "string" ? event.data : new Uint8Array(event.data as ArrayBuffer), () => {
+            if (!rendered && !controller.signal.aborted) {
+              rendered = true;
+              setPhase({ kind: "connected" });
+              term.focus();
+            }
+          });
         };
         socket.onclose = () => {
           if (!controller.signal.aborted) setPhase({ kind: "disconnected" });
@@ -170,6 +176,26 @@ export function Terminal() {
       for (const dispose of cleanup.reverse()) dispose();
     };
   }, [attempt]);
+
+  useEffect(() => {
+    if (phase.kind !== "connected") return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try {
+        const response = await fetch(`${PROXY_PREFIX}/agents`, { signal: controller.signal });
+        if (response.ok) {
+          const status = await response.json() as AgentsStatus;
+          if (!controller.signal.aborted) setAgentsStatus(status);
+        }
+      } catch {
+        // A momentary proxy failure should not hide the terminal.
+      }
+      if (!controller.signal.aborted) timer = setTimeout(poll, 4000);
+    };
+    void poll();
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [phase.kind, attempt]);
 
   const retryCopy = () => {
     if (pendingCopy === null) return;
@@ -209,6 +235,12 @@ export function Terminal() {
     <div className="pb-page">
       <div ref={host} className="pb-terminal" />
       {overlay}
+      {phase.kind === "connected" && agentsStatus && agentsStatus.state !== "ready" && (
+        <div className={`pb-agent-progress${pendingCopy !== null ? " pb-agent-progress-stacked" : ""}`} role="status">
+          <span>{t(agentsStatus.state === "error" ? "agentFailed" : "agentInstalling")}</span>
+          {agentsStatus.state === "error" && agentsStatus.message && <span className="pb-agent-error">{agentsStatus.message}</span>}
+        </div>
+      )}
       {pendingCopy !== null && (
         <div className="pb-copy-prompt" role="status">
           <span>{t("copyPending")}</span>

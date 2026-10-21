@@ -76,6 +76,11 @@ try {
   }, 180_000, "OpenCode setup");
   assert.equal(status.state, "ready", status.message);
   console.log("agents:", status.message);
+  const agentsUrl = `http://127.0.0.1:${ready.port}/agents`;
+  assert.equal((await fetch(agentsUrl)).status, 401, "agent setup state must require the plugin token");
+  const agentResponse = await fetch(agentsUrl, { headers: { "x-pom-plugin-token": ready.token } });
+  assert.equal(agentResponse.status, 200);
+  assert.equal((await agentResponse.json()).state, "ready");
   const tabs = (await herdr("tab", "list")).tabs;
   assert(tabs.some((tab) => tab.label === "pi"), "pi tab missing");
   assert(tabs.some((tab) => tab.label === "opencode"), `OpenCode tab missing: ${JSON.stringify(tabs)}`);

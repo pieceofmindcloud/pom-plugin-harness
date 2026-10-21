@@ -20,7 +20,8 @@
   height: 100%;
 }
 
-.pb-copy-prompt {
+.pb-copy-prompt,
+.pb-agent-progress {
   position: absolute;
   right: 16px;
   bottom: 16px;
@@ -37,6 +38,23 @@
   color: #e2e6f0;
   font-size: 12px;
   line-height: 1.4;
+}
+
+.pb-agent-progress {
+  left: 16px;
+  right: auto;
+  flex-direction: column;
+  align-items: flex-start;
+  max-width: min(480px, calc(100% - 32px));
+  overflow-wrap: anywhere;
+}
+
+.pb-agent-progress-stacked {
+  bottom: 86px;
+}
+
+.pb-agent-error {
+  color: #f4b7bd;
 }
 
 .pb-copy-prompt .pb-action {
