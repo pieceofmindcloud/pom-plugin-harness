@@ -44,6 +44,7 @@ function jsonLine(child) {
 function herdr(...args) {
   return new Promise((resolve, reject) => execFile(herdrBin, args, { cwd: home, env: runEnv, timeout: 60_000 }, (err, stdout, stderr) => {
     if (err) reject(new Error(`herdr ${args.join(" ")}: ${stderr || err.message}`));
+    else if (!stdout.trim()) resolve({});
     else { const reply = JSON.parse(stdout); if (reply.error) reject(new Error(JSON.stringify(reply.error))); else resolve(reply.result); }
   }));
 }
@@ -80,10 +81,15 @@ try {
   console.log("opencode tab exists");
   const agents = await herdr("agent", "list");
   console.log("agent state:", JSON.stringify(agents));
+  const openCodeTab = tabs.find((item) => item.label === "opencode");
+  const openCodePane = (await herdr("pane", "list")).panes.find((item) => item.tab_id === openCodeTab.tab_id);
+  assert(openCodePane, "OpenCode pane missing");
+  console.log("OpenCode pane:", JSON.stringify(await herdr("pane", "read", openCodePane.pane_id, "--source", "recent", "--format", "text")));
 
   const workspace = (await herdr("workspace", "list")).workspaces.find((item) => item.label === "POM");
   assert(workspace, "POM workspace missing");
-  const tab = await herdr("tab", "create", "--workspace", workspace.workspace_id, "--cwd", root, "--label", "Input test", "--focus");
+  const tab = await herdr("tab", "create", "--workspace", workspace.workspace_id, "--cwd", root, "--label", "Input test", "--no-focus");
+  await herdr("tab", "focus", tab.tab_id);
   socket = new WebSocket(`ws://127.0.0.1:${ready.port}/terminal?cols=100&rows=30`, {
     headers: { "x-pom-plugin-token": ready.token },
   });
@@ -94,6 +100,7 @@ try {
   await until(() => existsSync(target), 15_000, "Enter to run a command through ConPTY");
   assert.equal(readFileSync(target, "utf8").trim(), "ok");
   console.log("Enter executed a PowerShell command from the browser terminal");
+  assert(agents.agents?.some((agent) => agent.name === "opencode"), "OpenCode tab opened, but its agent did not start");
 } catch (error) {
   console.error("Windows end-to-end failure:", error, "\nlauncher logs:", logs);
   throw error;
