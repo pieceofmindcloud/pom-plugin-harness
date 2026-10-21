@@ -103,7 +103,14 @@ try {
   socket.on("message", (data) => { output = (output + data.toString()).slice(-40000); });
   const target = path.join(root, "enter-ok.txt");
   await until(async () => JSON.stringify(await herdr("pane", "read", tab.root_pane.pane_id, "--source", "visible", "--format", "text")).includes("PS "), 30_000, "PowerShell prompt");
-  socket.send(`Set-Content -Path '${target.replaceAll("'", "''")}' -Value 'ok'\r`);
+  const command = `Set-Content -Path '${target.replaceAll("'", "''")}' -Value 'ok'`;
+  for (const char of command) {
+    socket.send(char);
+    await delay(15);
+  }
+  await delay(500);
+  console.log("Before Enter:", JSON.stringify(await herdr("pane", "read", tab.root_pane.pane_id, "--source", "visible", "--format", "text")));
+  socket.send("\r");
   await delay(2000);
   console.log("After CR:", JSON.stringify(await herdr("pane", "read", tab.root_pane.pane_id, "--source", "visible", "--format", "text")), "created:", existsSync(target));
   if (!existsSync(target)) {
