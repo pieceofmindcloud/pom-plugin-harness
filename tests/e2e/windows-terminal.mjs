@@ -45,6 +45,7 @@ function herdr(...args) {
   return new Promise((resolve, reject) => execFile(herdrBin, args, { cwd: home, env: runEnv, timeout: 60_000 }, (err, stdout, stderr) => {
     if (err) reject(new Error(`herdr ${args.join(" ")}: ${stderr || err.message}`));
     else if (!stdout.trim()) resolve({});
+    else if (!stdout.trimStart().startsWith("{")) resolve(stdout);
     else { const reply = JSON.parse(stdout); if (reply.error) reject(new Error(JSON.stringify(reply.error))); else resolve(reply.result); }
   }));
 }
@@ -85,6 +86,7 @@ try {
   const openCodePane = (await herdr("pane", "list")).panes.find((item) => item.tab_id === openCodeTab.tab_id);
   assert(openCodePane, "OpenCode pane missing");
   console.log("OpenCode pane:", JSON.stringify(await herdr("pane", "read", openCodePane.pane_id, "--source", "recent", "--format", "text")));
+  console.log("OpenCode process:", JSON.stringify(await herdr("pane", "process-info", openCodePane.pane_id)));
 
   const workspace = (await herdr("workspace", "list")).workspaces.find((item) => item.label === "POM");
   assert(workspace, "POM workspace missing");
