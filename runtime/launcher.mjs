@@ -295,6 +295,15 @@ export function withPomProvider(current, baseUrl, models) {
 }
 
 /**
+ * pi prefers a credential saved in auth.json over models.json's apiKey. Bind
+ * only the POM credential to the private environment, so an old saved key
+ * cannot outlive a key rotation on the node. Other logins stay untouched.
+ */
+export function withPomCredential(auth) {
+  return { ...auth, [PROVIDER]: { type: "api_key", key: "$POM_API_KEY" } };
+}
+
+/**
  * pi's startup model: set it to the first POM model while the user has not
  * chosen one, or when the saved choice is a POM model no longer served. A
  * choice of another provider is never touched. Returns undefined to keep it.
@@ -305,6 +314,24 @@ export function withDefaultModel(settings, modelIds) {
   const stale = settings?.defaultProvider === PROVIDER && !modelIds.includes(settings?.defaultModel);
   if (!unset && !stale) return undefined;
   return { ...(settings ?? {}), defaultProvider: PROVIDER, defaultModel: preferredModel(modelIds) };
+}
+
+export function writePiCredential(homeDir) {
+  const authPath = join(homeDir, ".pi", "agent", "auth.json");
+  const text = readFileSafe(authPath);
+  let auth;
+  try {
+    auth = text === undefined ? {} : JSON.parse(text);
+  } catch {
+    log(`pi auth.json is invalid; keeping it unchanged at ${authPath}`);
+    return;
+  }
+  if (!auth || typeof auth !== "object" || Array.isArray(auth)) {
+    log(`pi auth.json is not an object; keeping it unchanged at ${authPath}`);
+    return;
+  }
+  const updated = `${JSON.stringify(withPomCredential(auth), null, 2)}\n`;
+  if (text !== updated) writeFileSync(authPath, updated, { mode: 0o600 });
 }
 
 function writePiConfig(models) {
@@ -737,6 +764,7 @@ async function main() {
   }
   if (warning) log(warning);
   writePiConfig(models);
+  writePiCredential(home);
   if (models.length > 0) log(`POM models: ${describeModels(models)}`);
 
   // herdr's pi integration reports exact agent state (working, blocked, idle);

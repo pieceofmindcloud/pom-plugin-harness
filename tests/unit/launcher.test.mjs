@@ -13,6 +13,8 @@ import {
   terminalSize,
   withDefaultModel,
   withPomProvider,
+  withPomCredential,
+  writePiCredential,
   withTrustedFolder,
   workspaceMoved,
 } from "../../runtime/launcher.mjs";
@@ -149,6 +151,38 @@ test("pi's POM provider follows the node's models and keeps the user's providers
     models: [{ id: "a", contextWindow: 65536, maxTokens: 65536 }, { id: "b" }],
   });
   assert.equal(withPomProvider(next, "http://127.0.0.1:8080/v1", []).providers.pom, undefined);
+});
+
+test("pi's saved POM login follows the current node key instead of overriding models.json", () => {
+  const other = { type: "api_key", key: "user-key" };
+  const previous = { pom: { type: "api_key", key: "sk-revoked" }, other };
+  const updated = withPomCredential(previous);
+  assert.deepEqual(updated, { pom: { type: "api_key", key: "$POM_API_KEY" }, other });
+  assert.deepEqual(previous.pom, { type: "api_key", key: "sk-revoked" }, "do not mutate the input");
+  assert.deepEqual(withPomCredential(updated), updated, "restarting with another node key needs no stored secret");
+});
+
+test("pi's private auth.json replaces only an obsolete POM credential and keeps invalid user data", async (t) => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const home = mkdtempSync(join(tmpdir(), "harness-pi-credential-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const authDir = join(home, ".pi", "agent");
+  mkdirSync(authDir, { recursive: true });
+  const authPath = join(authDir, "auth.json");
+  writeFileSync(authPath, JSON.stringify({ pom: { type: "api_key", key: "sk-old" }, other: { type: "api_key", key: "user-owned" } }));
+  writePiCredential(home);
+  const updated = readFileSync(authPath, "utf8");
+  assert.deepEqual(JSON.parse(updated), {
+    pom: { type: "api_key", key: "$POM_API_KEY" },
+    other: { type: "api_key", key: "user-owned" },
+  });
+  writePiCredential(home);
+  assert.equal(readFileSync(authPath, "utf8"), updated, "already configured: no rewrite");
+  writeFileSync(authPath, "{invalid json");
+  writePiCredential(home);
+  assert.equal(readFileSync(authPath, "utf8"), "{invalid json", "never replace a malformed user file");
 });
 
 test("pi's default model moves to POM without overriding a real choice", () => {
