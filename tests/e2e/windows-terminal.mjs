@@ -124,6 +124,18 @@ try {
   assert(nativeBinary, "wrapper must use the Windows x64 native package");
   console.log("OpenCode --version:", await new Promise((resolve) => execFile(nativeBinary, ["--version"], { cwd: root, env: runEnv, timeout: 10_000 }, (error, stdout, stderr) => resolve(error ? `${error.message} ${stderr}` : stdout.trim()))));
   console.log("OpenCode process:", JSON.stringify(await herdr("pane", "process-info", "--pane", openCodePane.pane_id)));
+  const openCodeScreen = await until(async () => {
+    const screen = await herdr("pane", "read", openCodePane.pane_id, "--source", "visible", "--format", "text");
+    return typeof screen === "string" && screen.trim() ? screen : undefined;
+  }, 120_000, "OpenCode to render its interface").catch(async (error) => {
+    const logDir = path.join(home, ".local", "share", "opencode", "log");
+    if (existsSync(logDir)) for (const file of readdirSync(logDir).slice(-2)) {
+      console.log("OpenCode startup log", file, readFileSync(path.join(logDir, file), "utf8")
+        .replaceAll(key, "[redacted]").split(/\r?\n/).slice(-20).map((line) => line.slice(0, 320)));
+    }
+    throw error;
+  });
+  console.log("OpenCode rendered:", JSON.stringify(openCodeScreen.slice(0, 200)));
   console.log("Windows process tree:", await new Promise((resolve) => execFile("powershell.exe", ["-NoProfile", "-Command", "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'opencode' -or $_.CommandLine -like '*pom-harness-windows-*' } | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress"], { timeout: 15000 }, (_, stdout, stderr) => resolve(stdout || stderr))));
   for (const relative of [".config/opencode", ".local/share/opencode", "AppData/Roaming/opencode", "AppData/Local/opencode"]) {
     const dir = path.join(home, relative);
