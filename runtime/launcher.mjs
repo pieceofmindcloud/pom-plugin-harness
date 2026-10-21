@@ -390,7 +390,9 @@ function followPomModels(initial, onChange) {
 
 function herdr(runEnv, args) {
   return new Promise((resolve, reject) => {
-    execFile(herdrBin, args, { env: runEnv, cwd: home, timeout: 60_000 }, (error, stdout, stderr) => {
+    const timeout = args[0] === "pane" && args[1] === "wait-output" ? 130_000 :
+      args[0] === "agent" && args[1] === "start" ? 90_000 : 60_000;
+    execFile(herdrBin, args, { env: runEnv, cwd: home, timeout }, (error, stdout, stderr) => {
       if (error) reject(new Error(`herdr ${args.join(" ")}: ${stderr.trim() || error.message}`));
       else resolve(stdout);
     });
@@ -539,6 +541,10 @@ function startTerminalServer(runEnv) {
       response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(listWorkspaceProjects(workspaceRoot)));
       return;
     }
+    if (request.method === "GET" && pathname === "/agents") {
+      response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(readJson(agentsStatusPath, { state: existsSync(agentsManifestPath) ? "installing" : "ready" })));
+      return;
+    }
     response.writeHead(404).end();
   });
 
@@ -599,21 +605,37 @@ async function openAgentTabs(runEnv, kinds) {
   const pom = await pomWorkspace(runEnv);
   if (!pom) return;
   const listed = await herdrJson(runEnv, ["tab", "list"]);
-  const present = new Set((listed.tabs ?? [])
-    .filter((tab) => tab.workspace_id === pom.workspace_id)
-    .map((tab) => tab.label));
-  const missing = AGENTS.filter((agent) => kinds.includes(agent.kind) && !present.has(agent.label));
+  const panes = await herdrJson(runEnv, ["pane", "list"]);
+  const active = new Set((await herdrJson(runEnv, ["agent", "list"])).agents?.map((agent) => agent.pane_id) ?? []);
   const toStart = [];
-  for (const agent of missing) {
-    const tab = await herdrJson(runEnv, [
+  for (const agent of AGENTS.filter((entry) => kinds.includes(entry.kind))) {
+    const existing = (listed.tabs ?? []).find((tab) => tab.workspace_id === pom.workspace_id && tab.label === agent.label);
+    const tab = existing ?? await herdrJson(runEnv, [
       "tab", "create", "--workspace", pom.workspace_id, "--cwd", workspace, "--label", agent.label, "--no-focus",
     ]);
-    toStart.push({ agent, pane: tab.root_pane.pane_id });
+    const pane = existing ? (panes.panes ?? []).find((item) => item.tab_id === tab.tab_id)?.pane_id : tab.root_pane.pane_id;
+    if (!pane) throw new Error(`${agent.label} tab has no pane`);
+    if (!active.has(pane)) toStart.push({ agent, pane });
   }
   await Promise.all(toStart.map(async ({ agent, pane }) => {
-    await herdrJson(runEnv, [
-      "agent", "start", agent.kind, "--kind", agent.kind, "--pane", pane, "--timeout", "60000",
-    ]).catch((error) => log(error.message));
+    // A newly created Windows pane may still be starting PowerShell. Wait for
+    // herdr to recognize its shell before handing it the agent command.
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await herdrJson(runEnv, [
+          "agent", "start", agent.kind, "--kind", agent.kind, "--pane", pane, "--timeout", "60000",
+        ]);
+        // Process detection alone says "idle" while OpenCode's first-run TUI
+        // is still blank. Keep the setup notice until the app actually draws.
+        if (agent.kind === "opencode") await herdr(runEnv, [
+          "pane", "wait-output", "--match", "█▀▀█", "--source", "visible", "--timeout", "120000", pane,
+        ]);
+        return;
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.includes("agent_pane_busy") || attempt >= 19) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    }
   }));
 }
 

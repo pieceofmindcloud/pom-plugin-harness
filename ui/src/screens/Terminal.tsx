@@ -4,10 +4,12 @@ import { Terminal as XTerm } from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getPluginAsset, usePluginI18n } from "../host/runtime";
 import { useScreenReady } from "../host/ready";
-import { resizeMessage, terminalUrl } from "../terminal/connection";
+import { clipboardShortcut, copyTerminalText, osc52Text } from "../terminal/clipboard";
+import { PROXY_PREFIX, resizeMessage, terminalUrl } from "../terminal/connection";
 
 /** `ui/runtime.json`: whether herdr and pi are up. The POM proxy knows where. */
 type RuntimeStatus = { status: "ready" } | { status: "starting" } | { status: "error"; error: string };
+type AgentsStatus = { state: "installing" | "ready" | "error"; message?: string };
 
 type Phase =
   | { kind: "starting" }
@@ -44,19 +46,24 @@ const THEME = {
 export function Terminal() {
   const { t } = usePluginI18n();
   const host = useRef<HTMLDivElement>(null);
+  const terminalRef = useRef<XTerm | null>(null);
+  const [pendingCopy, setPendingCopy] = useState<string | null>(null);
+  const [agentsStatus, setAgentsStatus] = useState<AgentsStatus | null>(null);
   const [phase, setPhase] = useState<Phase>({ kind: "starting" });
   const [attempt, setAttempt] = useState(0);
   const retry = useCallback(() => setAttempt((value) => value + 1), []);
 
-  // The terminal itself is the content of this screen: the host opens it when
-  // the socket is up or a failure to show has settled, not over the
-  // starting/connecting spinner.
+  // The terminal itself is the content of this screen: the host opens it after
+  // herdr first renders, or when a failure to show has settled, not while the
+  // socket is connected but its client is still attaching.
   useScreenReady(phase.kind === "connected" || phase.kind === "disconnected" || phase.kind === "error");
 
   useEffect(() => {
     const controller = new AbortController();
     const cleanup: Array<() => void> = [];
     setPhase({ kind: "starting" });
+    setPendingCopy(null);
+    setAgentsStatus(null);
 
     waitUntilReady(controller.signal)
       .then(() => {
@@ -77,8 +84,47 @@ export function Terminal() {
         term.loadAddon(fit);
         term.loadAddon(new WebLinksAddon());
         term.open(element);
+        terminalRef.current = term;
         fit.fit();
-        cleanup.push(() => term.dispose());
+        cleanup.push(() => { terminalRef.current = null; term.dispose(); });
+
+        let copyRequest = 0;
+        let recentHerdrSelection: { text: string; until: number } | null = null;
+        const copy = (text: string, preferAsync = false) => {
+          const request = ++copyRequest;
+          void copyTerminalText(text, preferAsync).then((copied) => {
+            if (!controller.signal.aborted && request === copyRequest) setPendingCopy(copied ? null : text);
+          });
+        };
+        term.attachCustomKeyEventHandler((event) => {
+          const selection = recentHerdrSelection && Date.now() < recentHerdrSelection.until ? recentHerdrSelection.text :
+            term.hasSelection() ? term.getSelection() : "";
+          const shortcut = clipboardShortcut(event, Boolean(selection), navigator.platform);
+          if (shortcut === "copy") {
+            event.preventDefault();
+            recentHerdrSelection = null;
+            term.clearSelection();
+            copy(selection);
+            return false;
+          }
+          // The browser fires `paste` on xterm's textarea; xterm sends its
+          // text as a bracketed paste instead of forwarding Ctrl+V to herdr.
+          if (shortcut === "paste") {
+            recentHerdrSelection = null;
+            return false;
+          }
+          return true;
+        });
+        const oscClipboard = term.parser.registerOscHandler(52, (data) => {
+          const text = osc52Text(data);
+          if (text !== undefined) {
+            term.clearSelection();
+            recentHerdrSelection = { text, until: Date.now() + 3000 };
+            copy(text, true);
+          }
+          return true;
+        });
+        cleanup.push(() => oscClipboard.dispose());
         // xterm forwards the right click to herdr as a mouse event; keep the
         // browser's own context menu from opening over the terminal.
         const suppressMenu = (event: MouseEvent) => event.preventDefault();
@@ -88,17 +134,21 @@ export function Terminal() {
         const socket = new WebSocket(terminalUrl(term.cols, term.rows));
         socket.binaryType = "arraybuffer";
         cleanup.push(() => socket.close());
-        socket.onopen = () => {
-          setPhase({ kind: "connected" });
-          term.focus();
-        };
+        let rendered = false;
         socket.onmessage = (event) => {
-          term.write(typeof event.data === "string" ? event.data : new Uint8Array(event.data as ArrayBuffer));
+          term.write(typeof event.data === "string" ? event.data : new Uint8Array(event.data as ArrayBuffer), () => {
+            if (!rendered && !controller.signal.aborted) {
+              rendered = true;
+              setPhase({ kind: "connected" });
+              term.focus();
+            }
+          });
         };
         socket.onclose = () => {
           if (!controller.signal.aborted) setPhase({ kind: "disconnected" });
         };
         const input = term.onData((data) => {
+          recentHerdrSelection = null;
           if (socket.readyState === WebSocket.OPEN) socket.send(data);
         });
         const binary = term.onBinary((data) => {
@@ -126,6 +176,36 @@ export function Terminal() {
       for (const dispose of cleanup.reverse()) dispose();
     };
   }, [attempt]);
+
+  useEffect(() => {
+    if (phase.kind !== "connected") return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try {
+        const response = await fetch(`${PROXY_PREFIX}/agents`, { signal: controller.signal });
+        if (response.ok) {
+          const status = await response.json() as AgentsStatus;
+          if (!controller.signal.aborted) setAgentsStatus(status);
+        }
+      } catch {
+        // A momentary proxy failure should not hide the terminal.
+      }
+      if (!controller.signal.aborted) timer = setTimeout(poll, 4000);
+    };
+    void poll();
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [phase.kind, attempt]);
+
+  const retryCopy = () => {
+    if (pendingCopy === null) return;
+    void copyTerminalText(pendingCopy).then((copied) => {
+      if (copied) {
+        setPendingCopy(null);
+        terminalRef.current?.focus();
+      }
+    });
+  };
 
   const overlay =
     phase.kind === "connected" ? null : phase.kind === "error" ? (
@@ -155,6 +235,18 @@ export function Terminal() {
     <div className="pb-page">
       <div ref={host} className="pb-terminal" />
       {overlay}
+      {phase.kind === "connected" && agentsStatus && agentsStatus.state !== "ready" && (
+        <div className={`pb-agent-progress${pendingCopy !== null ? " pb-agent-progress-stacked" : ""}`} role="status">
+          <span>{t(agentsStatus.state === "error" ? "agentFailed" : "agentInstalling")}</span>
+          {agentsStatus.state === "error" && agentsStatus.message && <span className="pb-agent-error">{agentsStatus.message}</span>}
+        </div>
+      )}
+      {pendingCopy !== null && (
+        <div className="pb-copy-prompt" role="status">
+          <span>{t("copyPending")}</span>
+          <button type="button" className="pb-action" onClick={retryCopy}>{t("copy")}</button>
+        </div>
+      )}
     </div>
   );
 }

@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -34,3 +35,19 @@ jobs:
           cargo test --locked
       - name: Launcher and CSS scoping tests
         run: node --test tests/unit/*.test.mjs
+
+  windows-terminal:
+    name: Windows terminal and OpenCode
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Assemble the official Windows runtime
+        shell: bash
+        run: ./scripts/fetch-runtime.sh --platform windows-x86_64
+      - name: Enter through ConPTY and OpenCode tab
+        run: node tests/e2e/windows-terminal.mjs

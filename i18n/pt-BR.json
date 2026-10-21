@@ -5,5 +5,9 @@
   "failed": "Não foi possível iniciar o terminal",
   "disconnected": "Terminal desconectado. O agente continua rodando no herdr.",
   "reconnect": "Reconectar",
-  "retry": "Tentar de novo"
+  "retry": "Tentar de novo",
+  "copy": "Copiar",
+  "copyPending": "Área de transferência bloqueada. Tente Copiar ou selecione com Shift+arrastar e use Ctrl+C.",
+  "agentInstalling": "Configurando o OpenCode. A aba aparecerá quando estiver pronto.",
+  "agentFailed": "Não foi possível iniciar o OpenCode. Execute pom-agents em uma aba para tentar de novo."
 }
