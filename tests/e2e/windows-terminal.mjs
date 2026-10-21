@@ -92,7 +92,9 @@ try {
   const workspace = (await herdr("workspace", "list")).workspaces.find((item) => item.label === "POM");
   assert(workspace, "POM workspace missing");
   const tab = await herdr("tab", "create", "--workspace", workspace.workspace_id, "--cwd", root, "--label", "Input test", "--no-focus");
-  await herdr("tab", "focus", tab.tab_id);
+  const created = (await herdr("tab", "list")).tabs.find((item) => item.label === "Input test");
+  assert(created, "new shell tab missing");
+  await herdr("tab", "focus", created.tab_id);
   socket = new WebSocket(`ws://127.0.0.1:${ready.port}/terminal?cols=100&rows=30`, {
     headers: { "x-pom-plugin-token": ready.token },
   });
@@ -113,6 +115,6 @@ try {
   mock?.kill();
   await delay(700);
   launcher?.kill();
-  try { rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }); }
+  try { rmSync(root, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 }); }
   catch (error) { console.warn("Windows temp cleanup deferred:", error.message); }
 }
