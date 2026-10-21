@@ -40,7 +40,7 @@ POM admin UI (/admin-ui/harness/terminal)
 - **Model limits.** The POM publishes each deployment's context (`context_length`) and per-request output ceiling (`max_tokens`) on `/v1/models`. The plugin passes them to both agents, or they compact too late for a small context:
   - pi: `contextWindow` and `maxTokens` per model in `models.json` (pi otherwise assumes 128000 and 16384).
   - OpenCode: `limit.context`, `limit.input` and `limit.output` per model (without them it never compacts).
-- `ui/` holds the terminal screen (xterm.js with fit and web-links addons). Leaving the screen closes only the herdr client; the agent keeps running, and coming back reattaches.
+- `ui/` holds the terminal screen (xterm.js with fit and web-links addons). On Windows/Linux, Ctrl+V pastes through the browser; Ctrl+C copies an xterm selection or interrupts the agent when nothing is selected. Herdr's own selections reach the browser clipboard through OSC 52. If the browser blocks automatic copying, a Copy button appears; Shift+drag selects text in xterm even while herdr captures the mouse. Leaving the screen closes only the herdr client; the agent keeps running, and coming back reattaches.
 - `scripts/fetch-runtime.sh` builds the runtime archive: a portable Node.js with npm, the herdr binary, `pi`, `node-pty` and `ws` from npm installed on the target platform, and `agents.json`, which pins the OpenCode and chrome-devtools-axi npm versions (`--opencode-version` for OpenCode).
 
 It requires a POM with the plugin proxy and `host.configure` (branch `feat/enterprise` of the `pom` repository, from commit `4848a9dd`). No change to the POM is needed beyond that.

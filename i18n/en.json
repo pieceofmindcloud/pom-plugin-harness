@@ -5,5 +5,7 @@
   "failed": "The terminal could not start",
   "disconnected": "Terminal disconnected. The agent keeps running in herdr.",
   "reconnect": "Reconnect",
-  "retry": "Try again"
+  "retry": "Try again",
+  "copy": "Copy",
+  "copyPending": "Clipboard blocked. Try Copy or Shift+drag, then Ctrl+C."
 }
