@@ -120,6 +120,7 @@ try {
   console.log("Enter executed a PowerShell command from the browser terminal");
   assert(agents.agents?.some((agent) => agent.name === "opencode" && agent.interactive_ready), "OpenCode tab opened, but its agent did not start");
   console.log("OpenCode process:", JSON.stringify(await herdr("pane", "process-info", "--pane", openCodePane.pane_id)));
+  console.log("Windows process tree:", await new Promise((resolve) => execFile("powershell.exe", ["-NoProfile", "-Command", "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'opencode' -or $_.CommandLine -like '*pom-harness-windows-*' } | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress"], { timeout: 15000 }, (_, stdout, stderr) => resolve(stdout || stderr))));
   await herdr("agent", "prompt", "opencode", "Say hello from OpenCode");
   const requests = await until(async () => {
     const response = await fetch(`http://127.0.0.1:${mockReady.port}/__mock/requests`);
