@@ -21,8 +21,12 @@ test("dev rebuild replaces stale agent pins and scripts rather than repackaging 
     }));
     writeFileSync(join(stage, "runtime.json"), JSON.stringify({ pi_version: "0.87.1", agents: { old: true } }));
     for (const name of ["launcher.mjs", "agent-shim.mjs", "agents.mjs"]) writeFileSync(join(stage, name), "old script");
-    execFileSync(join(root, "scripts", "dev-runtime.sh"), [], {
-      env: { ...process.env, POM_PLUGIN_OUT_DIR: out, POM_PLUGIN_PLATFORM: platform },
+    const shellOut = process.platform === "win32"
+      ? execFileSync("cygpath", ["-u", out], { encoding: "utf8" }).trim()
+      : out;
+    execFileSync("bash", ["./scripts/dev-runtime.sh"], {
+      cwd: root,
+      env: { ...process.env, POM_PLUGIN_OUT_DIR: shellOut, POM_PLUGIN_PLATFORM: platform },
     });
     const archive = join(out, `runtime-${platform}.tar.gz`);
     const entries = execFileSync("tar", ["-tzf", archive], { encoding: "utf8" }).split("\n");
