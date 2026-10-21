@@ -390,7 +390,8 @@ function followPomModels(initial, onChange) {
 
 function herdr(runEnv, args) {
   return new Promise((resolve, reject) => {
-    execFile(herdrBin, args, { env: runEnv, cwd: home, timeout: 60_000 }, (error, stdout, stderr) => {
+    const timeout = args[0] === "agent" && args[1] === "start" ? 90_000 : 60_000;
+    execFile(herdrBin, args, { env: runEnv, cwd: home, timeout }, (error, stdout, stderr) => {
       if (error) reject(new Error(`herdr ${args.join(" ")}: ${stderr.trim() || error.message}`));
       else resolve(stdout);
     });
@@ -599,22 +600,21 @@ async function openAgentTabs(runEnv, kinds) {
   const pom = await pomWorkspace(runEnv);
   if (!pom) return;
   const listed = await herdrJson(runEnv, ["tab", "list"]);
-  const present = new Set((listed.tabs ?? [])
-    .filter((tab) => tab.workspace_id === pom.workspace_id)
-    .map((tab) => tab.label));
-  const missing = AGENTS.filter((agent) => kinds.includes(agent.kind) && !present.has(agent.label));
+  const panes = await herdrJson(runEnv, ["pane", "list"]);
+  const active = new Set((await herdrJson(runEnv, ["agent", "list"])).agents?.map((agent) => agent.pane_id) ?? []);
   const toStart = [];
-  for (const agent of missing) {
-    const tab = await herdrJson(runEnv, [
+  for (const agent of AGENTS.filter((entry) => kinds.includes(entry.kind))) {
+    const existing = (listed.tabs ?? []).find((tab) => tab.workspace_id === pom.workspace_id && tab.label === agent.label);
+    const tab = existing ?? await herdrJson(runEnv, [
       "tab", "create", "--workspace", pom.workspace_id, "--cwd", workspace, "--label", agent.label, "--no-focus",
     ]);
-    toStart.push({ agent, pane: tab.root_pane.pane_id });
+    const pane = existing ? (panes.panes ?? []).find((item) => item.tab_id === tab.tab_id)?.pane_id : tab.root_pane.pane_id;
+    if (!pane) throw new Error(`${agent.label} tab has no pane`);
+    if (!active.has(pane)) toStart.push({ agent, pane });
   }
-  await Promise.all(toStart.map(async ({ agent, pane }) => {
-    await herdrJson(runEnv, [
-      "agent", "start", agent.kind, "--kind", agent.kind, "--pane", pane, "--timeout", "60000",
-    ]).catch((error) => log(error.message));
-  }));
+  await Promise.all(toStart.map(({ agent, pane }) => herdrJson(runEnv, [
+    "agent", "start", agent.kind, "--kind", agent.kind, "--pane", pane, "--timeout", "60000",
+  ])));
 }
 
 async function closeLegacyTabs(runEnv) {

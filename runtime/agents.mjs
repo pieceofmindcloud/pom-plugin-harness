@@ -250,16 +250,17 @@ function removeWrapper(binDir, name) {
 }
 
 /** The native binary in OpenCode's optional platform package. */
-function findPlatformBinary(nodeModules, scopeDir, prefix, relative) {
+export function bundledOpencodeBinary(nodeModules, platform = process.platform, arch = process.arch) {
   if (!nodeModules) return undefined;
-  const root = join(nodeModules, scopeDir);
-  if (!existsSync(root)) return undefined;
-  for (const entry of readdirSync(root)) {
-    if (!entry.startsWith(prefix)) continue;
-    for (const candidate of relative) {
-      const path = join(root, entry, candidate);
-      if (existsSync(path) && statSync(path).isFile()) return path;
-    }
+  const os = { win32: "windows", darwin: "darwin", linux: "linux" }[platform];
+  if (!os) return undefined;
+  const packageName = `opencode-${os}-${arch}`;
+  const file = join("bin", platform === "win32" ? "opencode.exe" : "opencode");
+  // opencode-ai/bin is an installer placeholder. With --ignore-scripts it is
+  // not replaced by the real binary, so only use the platform's npm package.
+  for (const suffix of ["", "-baseline"]) {
+    const binary = join(nodeModules, `${packageName}${suffix}`, file);
+    if (existsSync(binary) && statSync(binary).isFile()) return binary;
   }
   return undefined;
 }
@@ -409,7 +410,6 @@ export async function installAgents(context) {
     npm_config_fund: "false",
     npm_config_audit: "false",
   };
-  const exe = windows ? ".exe" : "";
   // Retire commands from older releases even if OpenCode's download fails.
   for (const name of ["claude", "codex"]) removeWrapper(binDir, name);
   rmSync(join(agentsRoot, "real-bin"), { recursive: true, force: true });
@@ -434,7 +434,7 @@ export async function installAgents(context) {
       removeWrapper(binDir, agent.kind);
       continue;
     }
-    const command = chosen.source === "host" ? hostCommand(chosen.path, nodeBin) : [findPlatformBinary(nodeModules, "", "opencode-", [join("bin", `opencode${exe}`)])];
+    const command = chosen.source === "host" ? hostCommand(chosen.path, nodeBin) : [bundledOpencodeBinary(nodeModules, windows ? "win32" : process.platform)];
     if (!command.every((part) => part && existsSync(part))) throw new Error(`${agent.label} is missing after install`);
     writeWrapper(
       binDir,

@@ -85,8 +85,9 @@ try {
   const openCodeTab = tabs.find((item) => item.label === "opencode");
   const openCodePane = (await herdr("pane", "list")).panes.find((item) => item.tab_id === openCodeTab.tab_id);
   assert(openCodePane, "OpenCode pane missing");
-  console.log("OpenCode pane:", JSON.stringify(await herdr("pane", "read", openCodePane.pane_id, "--source", "recent", "--format", "text")));
-  console.log("OpenCode process:", JSON.stringify(await herdr("pane", "process-info", openCodePane.pane_id)));
+  const paneText = await herdr("pane", "read", openCodePane.pane_id, "--source", "recent", "--format", "text");
+  console.log("OpenCode pane:", JSON.stringify(paneText));
+  assert(!String(paneText).includes("not compatible with the version of Windows"), "OpenCode installer placeholder was launched");
 
   const workspace = (await herdr("workspace", "list")).workspaces.find((item) => item.label === "POM");
   assert(workspace, "POM workspace missing");
@@ -112,5 +113,6 @@ try {
   mock?.kill();
   await delay(700);
   launcher?.kill();
-  rmSync(root, { recursive: true, force: true });
+  try { rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }); }
+  catch (error) { console.warn("Windows temp cleanup deferred:", error.message); }
 }

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
+  bundledOpencodeBinary,
   configureAgents,
   hasCurrentAgentsChoice,
   hostAgentDirs,
@@ -62,6 +63,30 @@ test("agents are looked for on the POM's PATH, then where their installers put t
   assert.deepEqual(hostAgentExecutableNames("opencode", "linux"), ["opencode"]);
   assert.equal(isWindowsBatchCommand("C:\\Users\\u\\AppData\\Roaming\\npm\\opencode.cmd", "win32"), true);
   assert.equal(isWindowsBatchCommand("/usr/bin/opencode", "linux"), false);
+});
+
+test("the bundled OpenCode binary comes from the exact platform package, never the npm installer placeholder", () => {
+  const root = mkdtempSync(join(tmpdir(), "pom-opencode-packages-"));
+  try {
+    const binary = (name, file) => {
+      const dir = join(root, name, "bin");
+      mkdirSync(dir, { recursive: true });
+      const target = join(dir, file);
+      writeFileSync(target, "fixture");
+      return target;
+    };
+    binary("opencode-ai", "opencode.exe");
+    binary("opencode-windows-arm64", "opencode.exe");
+    const baseline = binary("opencode-windows-x64-baseline", "opencode.exe");
+    assert.equal(bundledOpencodeBinary(root, "win32", "x64"), baseline);
+    const native = binary("opencode-windows-x64", "opencode.exe");
+    assert.equal(bundledOpencodeBinary(root, "win32", "x64"), native);
+    assert.equal(bundledOpencodeBinary(root, "darwin", "arm64"), undefined);
+    const mac = binary("opencode-darwin-arm64", "opencode");
+    assert.equal(bundledOpencodeBinary(root, "darwin", "arm64"), mac);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("Windows host command shims are invoked with call from the generated agent wrapper", async () => {
