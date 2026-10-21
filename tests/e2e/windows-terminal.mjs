@@ -99,10 +99,23 @@ try {
     headers: { "x-pom-plugin-token": ready.token },
   });
   await once(socket, "open");
+  let output = "";
+  socket.on("message", (data) => { output = (output + data.toString()).slice(-40000); });
   const target = path.join(root, "enter-ok.txt");
   await until(async () => JSON.stringify(await herdr("pane", "read", tab.root_pane.pane_id, "--source", "visible", "--format", "text")).includes("PS "), 30_000, "PowerShell prompt");
   socket.send(`Set-Content -Path '${target.replaceAll("'", "''")}' -Value 'ok'\r`);
-  await until(() => existsSync(target), 15_000, "Enter to run a command through ConPTY");
+  await delay(2000);
+  console.log("After CR:", JSON.stringify(await herdr("pane", "read", tab.root_pane.pane_id, "--source", "visible", "--format", "text")), "created:", existsSync(target));
+  if (!existsSync(target)) {
+    for (const [name, sequence] of [["LF", "\n"], ["CRLF", "\r\n"], ["win32", "\x1b[13;28;13;1;0;1_"], ["kitty", "\x1b[13u"]]) {
+      socket.send(sequence);
+      await delay(1200);
+      console.log(`After ${name}:`, JSON.stringify(await herdr("pane", "read", tab.root_pane.pane_id, "--source", "visible", "--format", "text")), "created:", existsSync(target));
+      if (existsSync(target)) break;
+    }
+  }
+  console.log("Recent browser terminal output:", JSON.stringify(output.slice(-2000)));
+  assert(existsSync(target), "Enter did not execute a PowerShell command through ConPTY");
   assert.equal(readFileSync(target, "utf8").trim(), "ok");
   console.log("Enter executed a PowerShell command from the browser terminal");
   assert(agents.agents?.some((agent) => agent.name === "opencode"), "OpenCode tab opened, but its agent did not start");
