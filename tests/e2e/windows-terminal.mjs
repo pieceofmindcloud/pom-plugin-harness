@@ -139,6 +139,13 @@ try {
     console.log("OpenCode agent state:", JSON.stringify(await herdr("agent", "list")));
     const response = await fetch(`http://127.0.0.1:${mockReady.port}/__mock/requests`);
     console.log("POM request paths:", (await response.json()).map((entry) => entry.url));
+    const logDir = path.join(home, ".local", "share", "opencode", "log");
+    if (existsSync(logDir)) for (const file of readdirSync(logDir).slice(-3)) {
+      const text = readFileSync(path.join(logDir, file), "utf8");
+      console.log("OpenCode log diagnostics", file, text.split(/\r?\n/)
+        .filter((line) => /error|warn|terminal|tty|failed|model/i.test(line))
+        .slice(-15).map((line) => line.replaceAll(key, "[redacted]").slice(0, 320)));
+    }
     throw error;
   });
   assert(requests.some((entry) => entry.method === "POST" && entry.authorization === `Bearer ${key}`), "OpenCode did not use the current POM credential");
