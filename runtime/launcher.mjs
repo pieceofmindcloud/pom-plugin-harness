@@ -32,15 +32,11 @@ import {
   AGENTS,
   configureAgents,
   detectHostAgents,
-  fccPort,
   hasCurrentAgentsChoice,
   installAgents,
   normalizeChoice,
   parsePomModels,
   preferredModel,
-  superviseFcc,
-  trustHerdrCodexHooks,
-  withOutputCeiling,
 } from "./agents.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -66,18 +62,11 @@ const TOKEN_HEADER = "x-pom-plugin-token";
 const MODEL_POLL_MS = Number(env.HARNESS_POM_MODEL_POLL_MS || 15_000);
 const PROVIDER = "pom";
 const token = randomBytes(32).toString("base64url");
-// FCC reaches the POM through the launcher at this secret path (it has no key setting).
-const relaySecret = randomBytes(24).toString("base64url");
 const agentsManifestPath = join(here, "agents.json");
 const npmCli = join(here, "npm", "bin", "npm-cli.js");
-// The POM models with their limits, for the agent shim (`agent-shim.mjs`).
-const pomModelsPath = join(dataDir, "pom-models.json");
-
 let server;
 let reported = false;
 let stopAgents = () => {};
-// The POM models as last listed, with their limits.
-let currentModels = [];
 
 function log(message) {
   process.stderr.write(`harness: ${message}\n`);
@@ -180,10 +169,7 @@ function installBrowserSkills() {
   const version = readJson(agentsManifestPath, undefined)?.npm?.["chrome-devtools-axi"];
   if (!version) return;
   const skill = browserSkillForVersion(readFileSync(join(here, "browser-skill.md"), "utf8"), version);
-  const targets = [
-    join(home, ".agents", "skills", "pom-harness-browser-verify", "SKILL.md"),
-    join(home, ".claude", "skills", "pom-harness-browser-verify", "SKILL.md"),
-  ];
+  const targets = [join(home, ".agents", "skills", "pom-harness-browser-verify", "SKILL.md")];
   for (const target of targets) {
     mkdirSync(dirname(target), { recursive: true });
     let current;
@@ -349,12 +335,6 @@ function readFileSafe(path) {
   }
 }
 
-/** The POM models for the agent shim, which runs later in a herdr pane. */
-function writePomModels(models) {
-  currentModels = models;
-  writeFileSync(pomModelsPath, `${JSON.stringify(models, null, 2)}\n`);
-}
-
 function describeModels(models) {
   return models.map(({ id, contextWindow, maxTokens }) => `${id} (context ${contextWindow ?? "?"}, output ${maxTokens ?? "?"})`).join(", ");
 }
@@ -373,7 +353,6 @@ function followPomModels(initial, onChange) {
     const current = JSON.stringify(models);
     if (current === known) return;
     known = current;
-    writePomModels(models);
     if (writePiConfig(models)) log(`POM models changed: ${describeModels(models)}`);
     onChange(models);
   }, MODEL_POLL_MS);
@@ -502,62 +481,6 @@ export function parseClientMessage(data, isBinary) {
   return { type: "input", data: text };
 }
 
-/**
- * FCC's `llamacpp` provider sends a fixed placeholder key, so it reaches the
- * POM through this loopback relay at a per-launch secret path, which swaps in
- * the POM key. Paths below `<secret>/v1` map onto the POM `/v1`.
- */
-export function relayTarget(rawUrl, secret, baseUrl) {
-  const prefix = `/relay/${secret}/v1`;
-  if (!rawUrl.startsWith(prefix)) return undefined;
-  return `${baseUrl}${rawUrl.slice(prefix.length)}`;
-}
-
-function relayToPom(request, response) {
-  const target = relayTarget(request.url, relaySecret, llmBaseUrl);
-  if (!target) {
-    response.writeHead(404).end();
-    return;
-  }
-  const url = new URL(target);
-  const headers = { ...request.headers, host: url.host, authorization: `Bearer ${llmApiKey}` };
-  delete headers["x-api-key"];
-  if (request.method === "POST" && url.pathname.endsWith("/chat/completions")) {
-    const chunks = [];
-    request.on("data", (chunk) => chunks.push(chunk));
-    request.on("end", () => {
-      let body = Buffer.concat(chunks);
-      try {
-        const patched = withOutputCeiling(JSON.parse(body.toString("utf8")), currentModels);
-        if (patched) body = Buffer.from(JSON.stringify(patched));
-      } catch {
-        // Not JSON: the POM answers it as it is.
-      }
-      delete headers["transfer-encoding"];
-      headers["content-length"] = String(body.length);
-      forwardToPom(request, response, url, headers).end(body);
-    });
-    return;
-  }
-  request.pipe(forwardToPom(request, response, url, headers));
-}
-
-function forwardToPom(request, response, url, headers) {
-  const outbound = http.request(
-    { host: url.hostname, port: url.port || 80, method: request.method, path: `${url.pathname}${url.search}`, headers },
-    (reply) => {
-      response.writeHead(reply.statusCode, reply.headers);
-      reply.pipe(response);
-    },
-  );
-  outbound.on("error", (error) => {
-    log(`relay ${request.method} ${url.pathname}: ${error.message}`);
-    if (!response.headersSent) response.writeHead(502);
-    response.end();
-  });
-  return outbound;
-}
-
 export function listWorkspaceProjects(root) {
   if (!root) return { status: "unavailable", projects: [] };
   try {
@@ -576,10 +499,6 @@ function startTerminalServer(runEnv) {
   const { WebSocketServer } = require("ws");
   const sockets = new WebSocketServer({ noServer: true });
   const httpServer = http.createServer((request, response) => {
-    if (request.url.startsWith(`/relay/${relaySecret}/`)) {
-      relayToPom(request, response);
-      return;
-    }
     if (!tokenMatches(request.headers[TOKEN_HEADER])) {
       response.writeHead(401, { "content-type": "text/plain" }).end("missing or invalid plugin token");
       return;
@@ -671,12 +590,12 @@ async function openAgentTabs(runEnv, kinds) {
   }));
 }
 
-async function closeLegacySetupTabs(runEnv) {
+async function closeLegacyTabs(runEnv) {
   const pom = await pomWorkspace(runEnv);
   if (!pom) return;
   const listed = await herdrJson(runEnv, ["tab", "list"]);
   for (const tab of listed.tabs ?? []) {
-    if (tab.workspace_id === pom.workspace_id && tab.label === "Setup") {
+    if (tab.workspace_id === pom.workspace_id && ["Setup", "Claude Code", "Codex"].includes(tab.label)) {
       await herdr(runEnv, ["tab", "close", tab.tab_id]).catch((error) => log(error.message));
     }
   }
@@ -699,11 +618,11 @@ function writeAgentsStatus(savedAt, state, message) {
 }
 
 /**
- * Claude Code, Codex and opencode next to pi. On first use all are selected
- * automatically: working host installs are reused, missing ones are bundled
- * from the pinned releases. `pom-agents` remains available for later changes.
+ * OpenCode next to pi. On first use it is selected automatically:
+ * a working host install is reused, otherwise the pinned release is bundled
+ * from npm. `pom-agents` remains available for later changes.
  */
-async function startAgents(runEnv, terminalPort, models) {
+async function startAgents(runEnv, models) {
   const manifest = readJson(agentsManifestPath, undefined);
   if (!manifest) {
     log("no agents manifest in this build; only pi is available");
@@ -721,26 +640,19 @@ async function startAgents(runEnv, terminalPort, models) {
   log(found.length > 0 ? `already on this machine: ${found.join(", ")}` : "no agent installed on this machine");
   writeFileSync(agentsDetectedPath, `${JSON.stringify({ detected, versions: manifest.npm, home: homedir() }, null, 2)}\n`);
   writeSetupCommand();
-  await closeLegacySetupTabs(runEnv).catch((error) => log(`old setup tab: ${error.message}`));
+  await closeLegacyTabs(runEnv).catch((error) => log(`old agent tabs: ${error.message}`));
   const existingChoice = readJson(agentsChoicePath, undefined);
-  if (!hasCurrentAgentsChoice(existingChoice)) {
+  const obsolete = Object.keys(existingChoice?.agents ?? {}).some((kind) => !AGENTS.some((agent) => agent.kind === kind));
+  if (!hasCurrentAgentsChoice(existingChoice) || obsolete) {
     const savedAt = new Date().toISOString();
-    const choice = normalizeChoice(undefined, detected);
+    const choice = normalizeChoice(hasCurrentAgentsChoice(existingChoice) ? existingChoice : undefined, detected);
     writeFileSync(`${agentsChoicePath}.tmp`, `${JSON.stringify({ schema: 1, savedAt, agents: choice.agents }, null, 2)}\n`);
     renameSync(`${agentsChoicePath}.tmp`, agentsChoicePath);
-    log("selecting Claude Code, Codex and opencode automatically");
+    log(obsolete ? "migrated agent choice to opencode" : "selecting opencode automatically");
   }
 
-  const context = {
-    home,
-    workspace: realpathSync(workspace),
-    llmBaseUrl,
-    relayUrl: `http://127.0.0.1:${terminalPort}/relay/${relaySecret}/v1`,
-    fccPort: await fccPort(home),
-    token: randomBytes(32).toString("base64url"),
-  };
+  const context = { home, llmBaseUrl };
   let latestModels = models;
-  let fcc;
   let applied;
   let queue = Promise.resolve();
 
@@ -752,7 +664,7 @@ async function startAgents(runEnv, terminalPort, models) {
     const kinds = AGENTS.filter((agent) => choice.agents[agent.kind].enabled).map((agent) => agent.kind);
     try {
       writeAgentsStatus(saved.savedAt, "installing", "Installing (the first time takes about a minute)...");
-      const { fccBin, exe } = await installAgents({
+      await installAgents({
         manifest,
         choice,
         dataDir,
@@ -760,8 +672,6 @@ async function startAgents(runEnv, terminalPort, models) {
         nodeBin,
         npmCli,
         binDir,
-        shim: join(here, "agent-shim.mjs"),
-        modelsPath: pomModelsPath,
         windows: isWindows,
         log: (message) => {
           log(message);
@@ -772,17 +682,10 @@ async function startAgents(runEnv, terminalPort, models) {
       for (const kind of kinds) {
         await herdr(runEnv, ["integration", "install", kind]).catch((error) => log(error.message));
       }
-      // Codex asks to review new hooks on start; herdr's state hook is ours.
-      trustHerdrCodexHooks(home);
-      if (fccBin && !fcc) fcc = superviseFcc({ fccBin, exe, runEnv, home, log });
-      if (!fccBin && fcc) {
-        fcc.stop();
-        fcc = undefined;
-      }
       writeAgentsStatus(saved.savedAt, "installing", "Opening a tab for each agent...");
       await openAgentTabs(runEnv, kinds);
       const labels = AGENTS.filter((agent) => kinds.includes(agent.kind)).map((agent) => agent.label);
-      log(labels.length > 0 ? `${labels.join(", ")} ready${fcc ? ` (FCC on 127.0.0.1:${context.fccPort})` : ""}` : "only pi chosen");
+      log(labels.length > 0 ? `${labels.join(", ")} ready` : "only pi chosen");
       writeAgentsStatus(saved.savedAt, "ready", labels.length > 0 ? `Ready: ${labels.join(", ")}.` : "Done.");
     } catch (error) {
       log(`agents unavailable: ${error.message}`);
@@ -799,12 +702,11 @@ async function startAgents(runEnv, terminalPort, models) {
     modelsChanged(nextModels) {
       latestModels = nextModels;
       queue = queue.then(() => {
-        if (configureAgents({ ...context, models: nextModels })) fcc?.restart();
+        configureAgents({ ...context, models: nextModels });
       });
     },
     stop() {
       unwatchFile(agentsChoicePath);
-      fcc?.stop();
     },
   };
 }
@@ -834,7 +736,6 @@ async function main() {
     warning = `POM models unavailable: ${error.message}`;
   }
   if (warning) log(warning);
-  writePomModels(models);
   writePiConfig(models);
   if (models.length > 0) log(`POM models: ${describeModels(models)}`);
 
@@ -850,7 +751,7 @@ async function main() {
   await namePiTab(runEnv).catch((error) => log(error.message));
   const port = await startTerminalServer(runEnv);
   let agents;
-  startAgents(runEnv, port, models)
+  startAgents(runEnv, models)
     .then((started) => {
       agents = started;
       stopAgents = () => started?.stop();

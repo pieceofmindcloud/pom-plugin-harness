@@ -16,12 +16,23 @@ stage="$root/build/runtime-$platform"
   exit 2
 }
 
-scripts=(launcher.mjs agents.mjs agent-shim.mjs agent-setup.mjs browser-skill.md)
+scripts=(launcher.mjs agents.mjs agent-setup.mjs browser-skill.md)
 excludes=()
-for name in "${scripts[@]}"; do excludes+=("--exclude=./$name"); done
+for name in "${scripts[@]}" agent-shim.mjs agents.json runtime.json; do excludes+=("--exclude=./$name"); done
 archive="$out/runtime-$platform.tar.gz"
 mkdir -p "$out"
-COPYFILE_DISABLE=1 tar -czf "$archive.tmp" "${excludes[@]}" -C "$stage" . -C "$root/runtime" "${scripts[@]}"
+metadata="$(mktemp -d "$out/runtime-metadata.XXXXXX")"
+trap 'rm -rf "$metadata" "$archive.tmp.tar" "$archive.tmp"' EXIT
+# An older staged runtime may still pin removed agents; never ship those pins again.
+jq '{npm: (.npm | with_entries(select(.key == "opencode-ai" or .key == "chrome-devtools-axi")))}' \
+  "$stage/agents.json" > "$metadata/agents.json"
+jq --slurpfile agents "$metadata/agents.json" '.agents = $agents[0]' \
+  "$stage/runtime.json" > "$metadata/runtime.json"
+# --exclude also applies to later operands on both GNU tar and bsdtar.
+# Append the updated files separately, then compress the complete archive.
+COPYFILE_DISABLE=1 tar -cf "$archive.tmp.tar" "${excludes[@]}" -C "$stage" .
+COPYFILE_DISABLE=1 tar -rf "$archive.tmp.tar" -C "$root/runtime" "${scripts[@]}" -C "$metadata" agents.json runtime.json
+gzip -c "$archive.tmp.tar" > "$archive.tmp"
 mv "$archive.tmp" "$archive"
 if command -v sha256sum >/dev/null 2>&1; then
   sha256sum "$archive" | cut -d' ' -f1 > "$archive.sha256"

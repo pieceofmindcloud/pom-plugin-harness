@@ -2,7 +2,7 @@
 //
 //   node agent-setup.mjs <data dir>
 //
-// The launcher installs all agents automatically on first use. This chooser is
+// The launcher enables OpenCode automatically on first use. This chooser is
 // available from any pane afterward; it reads the launcher's detected host
 // installs and pinned versions, saves `agents-choice.json`, then follows
 // `agents-status.json` while the launcher applies the change.

@@ -1,8 +1,8 @@
 # POM Plugin - Harness
 
-A web terminal in the POM admin UI, the **Harness** menu item and route (`/admin-ui/harness/terminal`), attached to [herdr](https://herdr.dev) with a [pi](https://pi.dev) coding agent inside, already connected to the models the POM node serves. Claude Code, Codex and opencode can run next to pi, each in its own tab and wired to the same models.
+A web terminal in the POM admin UI, the **Harness** menu item and route (`/admin-ui/harness/terminal`), attached to [herdr](https://herdr.dev) with a [pi](https://pi.dev) coding agent inside, already connected to the models the POM node serves. OpenCode runs next to pi in its own tab, wired to the same models.
 
-This repository holds no herdr, pi or agent code. Every build takes the official releases: the herdr binary from its GitHub release (checked against the SHA-256 digest GitHub publishes) and the prebuilt `@earendil-works/pi-coding-agent` package from npm (default dist-tag `latest`). The other agents are pinned at build time and downloaded on first use (see below).
+This repository holds no herdr, pi or agent code. Every build takes the official releases: the herdr binary from its GitHub release (checked against the SHA-256 digest GitHub publishes) and the prebuilt `@earendil-works/pi-coding-agent` package from npm (default dist-tag `latest`). OpenCode is pinned at build time and downloaded on first use when absent (see below).
 
 ## How it works
 
@@ -32,19 +32,16 @@ POM admin UI (/admin-ui/harness/terminal)
   - **pi configuration.** pi's `models.json` gets a `pom` provider with the node's models, polled from `/v1/models` every 15 s; pi rereads it whenever `/model` opens. Providers the user adds are kept. pi's default model is set only while none is chosen, or when the chosen POM model disappears. The plugin's working folder is trusted in pi once, and a saved "do not trust" is kept.
   - **herdr and the agent.** The launcher starts `herdr server` and creates a "POM" workspace with a pi agent the first time; herdr restores it after restarts. pi and every agent tab start in the POM's shared projects workspace (`workspace_root` from `host.configure`, the Storage setting), the same folder the other harness plugins use; only a POM without one falls back to `data/workspace`. `DATA_EPOCH` 3 recreates the herdr workspace of installs that had started in `data/workspace`.
   - **Terminal endpoint.** It serves `/terminal` over WebSocket, only with the POM's token. Text frames are keystrokes, and `{"type":"resize","cols","rows"}` resizes the terminal.
-- **Other agents** (`runtime/agents.mjs`, `runtime/agent-setup.mjs`, `runtime/agent-shim.mjs`):
-  - **Installed automatically on first use.** Claude Code, Codex and opencode are enabled without a prompt. A working host install (including Windows `.exe`, `.cmd` and `.bat` launchers, found on the POM's `PATH` or common installer paths and answering `--version`) is reused; otherwise the pinned release is downloaded into the plugin data directory. Older saved choices migrate to all three once; current `pom-agents` choices are kept. `pom-agents` in any pane opens the chooser later; turning an agent off removes its command but leaves its open tab alone.
-  - **Browser verification.** Before pi starts, the plugin installs its `pom-harness-browser-verify` Agent Skill in its private global skill directories, covering pi, Codex, OpenCode and Claude Code. When browser verification is needed, the skill runs the pinned `chrome-devtools-axi` package through `npx`; each agent gets an isolated Chrome session, started only on demand.
-  - **How each reaches the POM.** opencode talks to the POM directly through a `pom` provider. Claude Code and Codex go through [free-claude-code](https://github.com/Alishahryar1/free-claude-code) (FCC, pinned commit, installed with a checksum-verified `uv`), which translates their APIs to Chat Completions. FCC's `llamacpp` provider reaches the POM through a relay in the launcher that adds the POM key.
-  - **Already configured.** Onboarding and folder trust are done, herdr's integrations are installed, and Codex trusts herdr's state hook. Only the plugin's own entries are written: the `pom` provider, FCC's connection keys, and defaults while the user has none. FCC's admin page does not open on startup by default; an explicit `FCC_OPEN_BROWSER` choice is preserved. Providers and models a user adds stay theirs.
-- **Model limits.** The POM publishes each deployment's context (`context_length`) and per-request output ceiling (`max_tokens`) on `/v1/models`. The plugin passes them to every agent, or it compacts too late for a small context:
+- **OpenCode** (`runtime/agents.mjs`, `runtime/agent-setup.mjs`):
+  - **Installed automatically on first use.** OpenCode is enabled without a prompt. A working host install (including Windows `.exe`, `.cmd` and `.bat` launchers, found on the POM's `PATH` or common installer paths and answering `--version`) is reused; otherwise the pinned release is downloaded into the plugin data directory. Existing OpenCode choices are preserved on upgrade; legacy Claude Code and Codex choices, tabs, wrappers and installed agent bundles are retired without wiping private-home settings or the workspace. `pom-agents` in any pane opens the chooser later; turning OpenCode off removes its command but leaves its open tab alone.
+  - **Browser verification.** Before pi starts, the plugin installs its `pom-harness-browser-verify` Agent Skill in the private global skill directory. When browser verification is needed, pi or OpenCode runs the pinned `chrome-devtools-axi` package through `npx`; each gets an isolated Chrome session, started only on demand.
+  - **How it reaches the POM.** OpenCode talks to the POM directly through a `pom` provider. No translation proxy is required.
+  - **Already configured.** OpenCode's `pom` provider and default model while unset are written, and herdr's integration is installed. Providers and models a user adds stay theirs.
+- **Model limits.** The POM publishes each deployment's context (`context_length`) and per-request output ceiling (`max_tokens`) on `/v1/models`. The plugin passes them to both agents, or they compact too late for a small context:
   - pi: `contextWindow` and `maxTokens` per model in `models.json` (pi otherwise assumes 128000 and 16384).
-  - opencode: `limit.context`, `limit.input` and `limit.output` per model (without them it never compacts).
-  - Claude Code: `CLAUDE_CODE_AUTO_COMPACT_WINDOW` and `CLAUDE_CODE_MAX_OUTPUT_TOKENS` for the model FCC routes to (FCC sets 190000 for every model).
-  - Codex: the context window in the model catalog FCC passes it (FCC falls back to 200000).
-  - Requests without an output limit (Codex's) get the model's ceiling in the relay, since the POM answers those with 512 tokens.
+  - OpenCode: `limit.context`, `limit.input` and `limit.output` per model (without them it never compacts).
 - `ui/` holds the terminal screen (xterm.js with fit and web-links addons). Leaving the screen closes only the herdr client; the agent keeps running, and coming back reattaches.
-- `scripts/fetch-runtime.sh` builds the runtime archive: a portable Node.js with npm, the herdr binary, `pi`, `node-pty` and `ws` from npm installed on the target platform, and `agents.json`, which pins the Claude Code, Codex, opencode and chrome-devtools-axi npm versions, the `uv` release with its SHA-256 and the FCC commit (`--claude-version`, `--codex-version`, `--opencode-version`, `--uv-version`, `--fcc-ref`).
+- `scripts/fetch-runtime.sh` builds the runtime archive: a portable Node.js with npm, the herdr binary, `pi`, `node-pty` and `ws` from npm installed on the target platform, and `agents.json`, which pins the OpenCode and chrome-devtools-axi npm versions (`--opencode-version` for OpenCode).
 
 It requires a POM with the plugin proxy and `host.configure` (branch `feat/enterprise` of the `pom` repository, from commit `4848a9dd`). No change to the POM is needed beyond that.
 
@@ -58,7 +55,7 @@ node --test tests/unit/*.test.mjs
 scripts/package.sh --platform macos-aarch64 --version 0.1.0 [--pi-version latest|<version>] [--herdr-version latest|v0.9.1]
 ```
 
-Build on the target platform: the npm install resolves native dependencies (`node-pty`, image tooling) for the machine it runs on. The packaged library is about 76 MB, and the unpacked runtime about 260 MB. On first start, pi downloads `fd` and `ripgrep` into its private agent directory, and the chosen agents are downloaded (FCC with its Python takes about 270 MB, plus each agent's npm package), so the node needs internet access once.
+Build on the target platform: the npm install resolves native dependencies (`node-pty`, image tooling) for the machine it runs on. The packaged library is about 76 MB, and the unpacked runtime about 260 MB. On first start, pi downloads `fd` and `ripgrep` into its private agent directory, and OpenCode is downloaded if it is not available on the host, so the node needs internet access once.
 
 ## Shared workspace and plugin documentation
 
@@ -87,7 +84,6 @@ env -i HOME=$HOME PATH=/usr/bin:/bin \
 
 - **pi and anything it runs have the POM user's permissions** on the node. Access goes through the POM's admin-only proxy, but there is no sandbox beyond that user account.
 - **pi loads context files from parent folders** of its working folder (`AGENTS.md`, `CLAUDE.md`). With the plugin data under a user's home directory, that user's own files are included.
-- **Small contexts compact early or constantly.** The agents keep a fixed reserve for the reply and the summary (pi 16384 tokens, opencode 20000, Claude Code more), so a deployment of a few tens of thousands of tokens leaves them little room.
+- **Small contexts compact early or constantly.** The agents keep a fixed reserve for the reply and the summary (pi 16384 tokens, OpenCode 20000), so a deployment of a few tens of thousands of tokens leaves them little room.
 - **Agents taken from the machine run with the plugin's private home**, so they do not see the user's own logins, settings or history.
-- **A new POM limit reaches a running Claude Code or Codex session on its next start**; pi and opencode reread their config.
 - **Windows builds are wired but are not exercised on a native Windows host by the test suite.** Panes use PowerShell through `pom-shell.cmd`, which restores the private `PATH`; host agents are detected from `.exe`, `.cmd` and `.bat` launchers. The installer handles Windows ConPTY key encodings, but native end-to-end verification is still needed.

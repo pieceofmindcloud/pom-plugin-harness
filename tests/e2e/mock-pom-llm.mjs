@@ -41,8 +41,7 @@ function lastUserText(body) {
     typeof message.content === "string"
       ? message.content
       : (message.content ?? []).map((part) => part.text ?? "").join("");
-  // Claude Code prepends <system-reminder> context to the user's text; echo only what was typed.
-  return text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "").trim();
+  return text.trim();
 }
 
 const server = http.createServer((request, response) => {
