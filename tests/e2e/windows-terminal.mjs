@@ -90,7 +90,7 @@ try {
   const openCodeTab = tabs.find((item) => item.label === "opencode");
   const openCodePane = (await herdr("pane", "list")).panes.find((item) => item.tab_id === openCodeTab.tab_id);
   assert(openCodePane, "OpenCode pane missing");
-  const paneText = await herdr("pane", "read", openCodePane.pane_id, "--source", "recent", "--format", "text");
+  const paneText = await herdr("pane", "read", openCodePane.pane_id, "--source", "visible", "--format", "text");
   console.log("OpenCode pane:", JSON.stringify(paneText));
   assert(!String(paneText).includes("not compatible with the version of Windows"), "OpenCode installer placeholder was launched");
 
@@ -116,8 +116,7 @@ try {
   }
   await until(async () => String(await herdr("pane", "read", tab.root_pane.pane_id, "--source", "visible", "--format", "text")).includes("-Value 'ok'"), 15_000, "complete command before pressing Enter");
   socket.send("\r");
-  await until(() => existsSync(target), 15_000, `Enter through ConPTY; latest terminal: ${JSON.stringify(output.slice(-400))}`);
-  assert.equal(readFileSync(target, "utf8").trim(), "ok");
+  await until(() => existsSync(target) && readFileSync(target, "utf8").trim() === "ok", 15_000, `Enter through ConPTY; latest terminal: ${JSON.stringify(output.slice(-400))}`);
   console.log("Enter executed a PowerShell command from the browser terminal");
   assert(agents.agents?.some((agent) => agent.name === "opencode"), "OpenCode tab opened, but its agent did not start");
 } catch (error) {
