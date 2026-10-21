@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -84,6 +85,35 @@ test("the bundled OpenCode binary comes from the exact platform package, never t
     assert.equal(bundledOpencodeBinary(root, "darwin", "arm64"), undefined);
     const mac = binary("opencode-darwin-arm64", "opencode");
     assert.equal(bundledOpencodeBinary(root, "darwin", "arm64"), mac);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Windows upgrades replace a cached installer-placeholder wrapper without redownloading OpenCode", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pom-opencode-upgrade-"));
+  try {
+    const plan = { "opencode-ai": "1.18.32" };
+    const id = createHash("sha256").update(JSON.stringify(plan)).digest("hex").slice(0, 16);
+    const npmDir = join(root, "data", "agents", `npm-${id}`);
+    const modules = join(npmDir, "node_modules");
+    for (const name of ["opencode-ai", "opencode-windows-x64"]) {
+      const dir = join(modules, name, "bin");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "opencode.exe"), name);
+    }
+    writeFileSync(join(npmDir, ".complete"), "cached");
+    const binDir = join(root, "data", "bin");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(binDir, "opencode.cmd"), "broken old wrapper");
+    await installAgents({
+      manifest, choice: { agents: { opencode: { enabled: true, source: "bundled" } } },
+      dataDir: join(root, "data"), runEnv: {}, nodeBin: "node.exe", npmCli: "unused",
+      binDir, windows: true, arch: "x64", log: () => { throw new Error("cached package should not be installed again"); },
+    });
+    const wrapper = readFileSync(join(binDir, "opencode.cmd"), "utf8");
+    assert.match(wrapper, /opencode-windows-x64[\\/]bin[\\/]opencode\.exe/i);
+    assert.doesNotMatch(wrapper, /opencode-ai[\\/]bin[\\/]opencode\.exe/i);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

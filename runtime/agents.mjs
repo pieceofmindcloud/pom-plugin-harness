@@ -399,7 +399,7 @@ async function installOnce(root, prefix, spec, install) {
  * and write the `opencode` command in `binDir` when enabled.
  */
 export async function installAgents(context) {
-  const { manifest, choice, dataDir, runEnv, nodeBin, npmCli, binDir, windows, log } = context;
+  const { manifest, choice, dataDir, runEnv, nodeBin, npmCli, binDir, windows, log, arch = process.arch } = context;
   const plan = installPlan(manifest, choice);
   const agentsRoot = join(dataDir, "agents");
   mkdirSync(agentsRoot, { recursive: true });
@@ -434,7 +434,7 @@ export async function installAgents(context) {
       removeWrapper(binDir, agent.kind);
       continue;
     }
-    const command = chosen.source === "host" ? hostCommand(chosen.path, nodeBin) : [bundledOpencodeBinary(nodeModules, windows ? "win32" : process.platform)];
+    const command = chosen.source === "host" ? hostCommand(chosen.path, nodeBin) : [bundledOpencodeBinary(nodeModules, windows ? "win32" : process.platform, arch)];
     if (!command.every((part) => part && existsSync(part))) throw new Error(`${agent.label} is missing after install`);
     writeWrapper(
       binDir,

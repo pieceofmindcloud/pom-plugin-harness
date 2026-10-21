@@ -86,13 +86,12 @@ try {
   assert(tabs.some((tab) => tab.label === "opencode"), `OpenCode tab missing: ${JSON.stringify(tabs)}`);
   console.log("opencode tab exists");
   const agents = await herdr("agent", "list");
-  console.log("agent state:", JSON.stringify(agents));
+  console.log("agent state:", agents.agents?.map(({ name, interactive_ready }) => ({ name, interactive_ready })));
   const openCodeTab = tabs.find((item) => item.label === "opencode");
   const openCodePane = (await herdr("pane", "list")).panes.find((item) => item.tab_id === openCodeTab.tab_id);
   assert(openCodePane, "OpenCode pane missing");
   const paneText = await herdr("pane", "read", openCodePane.pane_id, "--source", "visible", "--format", "text");
-  console.log("OpenCode pane:", JSON.stringify(paneText));
-  assert(!String(paneText).includes("not compatible with the version of Windows"), "OpenCode installer placeholder was launched");
+  assert(String(paneText).includes("█▀▀█"), "OpenCode was marked ready before its interface appeared");
 
   const workspace = (await herdr("workspace", "list")).workspaces.find((item) => item.label === "POM");
   assert(workspace, "POM workspace missing");
@@ -120,27 +119,7 @@ try {
   console.log("Enter executed a PowerShell command from the browser terminal");
   assert(agents.agents?.some((agent) => agent.name === "opencode" && agent.interactive_ready), "OpenCode tab opened, but its agent did not start");
   const wrapper = readFileSync(path.join(dataDir, "bin", "opencode.cmd"), "utf8");
-  const nativeBinary = wrapper.match(/"([^"]*opencode-windows-x64\\bin\\opencode\.exe)"/i)?.[1];
-  assert(nativeBinary, "wrapper must use the Windows x64 native package");
-  console.log("OpenCode --version:", await new Promise((resolve) => execFile(nativeBinary, ["--version"], { cwd: root, env: runEnv, timeout: 10_000 }, (error, stdout, stderr) => resolve(error ? `${error.message} ${stderr}` : stdout.trim()))));
-  console.log("OpenCode process:", JSON.stringify(await herdr("pane", "process-info", "--pane", openCodePane.pane_id)));
-  const openCodeScreen = await until(async () => {
-    const screen = await herdr("pane", "read", openCodePane.pane_id, "--source", "visible", "--format", "text");
-    return typeof screen === "string" && screen.trim() ? screen : undefined;
-  }, 120_000, "OpenCode to render its interface").catch(async (error) => {
-    const logDir = path.join(home, ".local", "share", "opencode", "log");
-    if (existsSync(logDir)) for (const file of readdirSync(logDir).slice(-2)) {
-      console.log("OpenCode startup log", file, readFileSync(path.join(logDir, file), "utf8")
-        .replaceAll(key, "[redacted]").split(/\r?\n/).slice(-20).map((line) => line.slice(0, 320)));
-    }
-    throw error;
-  });
-  console.log("OpenCode rendered:", JSON.stringify(openCodeScreen.slice(0, 1800)));
-  console.log("Windows process tree:", await new Promise((resolve) => execFile("powershell.exe", ["-NoProfile", "-Command", "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'opencode' -or $_.CommandLine -like '*pom-harness-windows-*' } | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress"], { timeout: 15000 }, (_, stdout, stderr) => resolve(stdout || stderr))));
-  for (const relative of [".config/opencode", ".local/share/opencode", "AppData/Roaming/opencode", "AppData/Local/opencode"]) {
-    const dir = path.join(home, relative);
-    if (existsSync(dir)) console.log("OpenCode home", relative, "files:", readdirSync(dir).slice(0, 20));
-  }
+  assert.match(wrapper, /opencode-windows-x64\\bin\\opencode\.exe/i, "wrapper must use the native Windows package");
   await herdr("agent", "prompt", "opencode", "Say hello from OpenCode");
   const requests = await until(async () => {
     const response = await fetch(`http://127.0.0.1:${mockReady.port}/__mock/requests`);
