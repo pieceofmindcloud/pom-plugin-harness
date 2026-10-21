@@ -143,7 +143,6 @@ try {
     if (existsSync(logDir)) for (const file of readdirSync(logDir).slice(-3)) {
       const text = readFileSync(path.join(logDir, file), "utf8");
       console.log("OpenCode log diagnostics", file, text.split(/\r?\n/)
-        .filter((line) => /error|warn|terminal|tty|failed|model/i.test(line))
         .slice(-15).map((line) => line.replaceAll(key, "[redacted]").slice(0, 320)));
     }
     throw error;
