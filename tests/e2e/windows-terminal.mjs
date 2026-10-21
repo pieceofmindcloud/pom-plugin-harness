@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -119,8 +119,16 @@ try {
   await until(() => existsSync(target) && readFileSync(target, "utf8").trim() === "ok", 15_000, `Enter through ConPTY; latest terminal: ${JSON.stringify(output.slice(-400))}`);
   console.log("Enter executed a PowerShell command from the browser terminal");
   assert(agents.agents?.some((agent) => agent.name === "opencode" && agent.interactive_ready), "OpenCode tab opened, but its agent did not start");
+  const wrapper = readFileSync(path.join(dataDir, "bin", "opencode.cmd"), "utf8");
+  const nativeBinary = wrapper.match(/"([^"]*opencode-windows-x64\\bin\\opencode\.exe)"/i)?.[1];
+  assert(nativeBinary, "wrapper must use the Windows x64 native package");
+  console.log("OpenCode --version:", await new Promise((resolve) => execFile(nativeBinary, ["--version"], { cwd: root, env: runEnv, timeout: 10_000 }, (error, stdout, stderr) => resolve(error ? `${error.message} ${stderr}` : stdout.trim()))));
   console.log("OpenCode process:", JSON.stringify(await herdr("pane", "process-info", "--pane", openCodePane.pane_id)));
   console.log("Windows process tree:", await new Promise((resolve) => execFile("powershell.exe", ["-NoProfile", "-Command", "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'opencode' -or $_.CommandLine -like '*pom-harness-windows-*' } | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress"], { timeout: 15000 }, (_, stdout, stderr) => resolve(stdout || stderr))));
+  for (const relative of [".config/opencode", ".local/share/opencode", "AppData/Roaming/opencode", "AppData/Local/opencode"]) {
+    const dir = path.join(home, relative);
+    if (existsSync(dir)) console.log("OpenCode home", relative, "files:", readdirSync(dir).slice(0, 20));
+  }
   await herdr("agent", "prompt", "opencode", "Say hello from OpenCode");
   const requests = await until(async () => {
     const response = await fetch(`http://127.0.0.1:${mockReady.port}/__mock/requests`);
