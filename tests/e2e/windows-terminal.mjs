@@ -135,7 +135,7 @@ try {
     }
     throw error;
   });
-  console.log("OpenCode rendered:", JSON.stringify(openCodeScreen.slice(0, 200)));
+  console.log("OpenCode rendered:", JSON.stringify(openCodeScreen.slice(0, 1800)));
   console.log("Windows process tree:", await new Promise((resolve) => execFile("powershell.exe", ["-NoProfile", "-Command", "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'opencode' -or $_.CommandLine -like '*pom-harness-windows-*' } | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress"], { timeout: 15000 }, (_, stdout, stderr) => resolve(stdout || stderr))));
   for (const relative of [".config/opencode", ".local/share/opencode", "AppData/Roaming/opencode", "AppData/Local/opencode"]) {
     const dir = path.join(home, relative);

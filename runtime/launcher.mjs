@@ -390,7 +390,8 @@ function followPomModels(initial, onChange) {
 
 function herdr(runEnv, args) {
   return new Promise((resolve, reject) => {
-    const timeout = args[0] === "agent" && args[1] === "start" ? 90_000 : 60_000;
+    const timeout = args[0] === "pane" && args[1] === "wait-output" ? 130_000 :
+      args[0] === "agent" && args[1] === "start" ? 90_000 : 60_000;
     execFile(herdrBin, args, { env: runEnv, cwd: home, timeout }, (error, stdout, stderr) => {
       if (error) reject(new Error(`herdr ${args.join(" ")}: ${stderr.trim() || error.message}`));
       else resolve(stdout);
@@ -623,6 +624,11 @@ async function openAgentTabs(runEnv, kinds) {
       try {
         await herdrJson(runEnv, [
           "agent", "start", agent.kind, "--kind", agent.kind, "--pane", pane, "--timeout", "60000",
+        ]);
+        // Process detection alone says "idle" while OpenCode's first-run TUI
+        // is still blank. Keep the setup notice until the app actually draws.
+        if (agent.kind === "opencode") await herdr(runEnv, [
+          "pane", "wait-output", "--match", "█▀▀█", "--source", "visible", "--timeout", "120000", pane,
         ]);
         return;
       } catch (error) {
