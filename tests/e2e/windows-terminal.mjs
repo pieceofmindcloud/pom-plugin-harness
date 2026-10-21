@@ -118,7 +118,15 @@ try {
   socket.send("\r");
   await until(() => existsSync(target) && readFileSync(target, "utf8").trim() === "ok", 15_000, `Enter through ConPTY; latest terminal: ${JSON.stringify(output.slice(-400))}`);
   console.log("Enter executed a PowerShell command from the browser terminal");
-  assert(agents.agents?.some((agent) => agent.name === "opencode"), "OpenCode tab opened, but its agent did not start");
+  assert(agents.agents?.some((agent) => agent.name === "opencode" && agent.interactive_ready), "OpenCode tab opened, but its agent did not start");
+  await herdr("agent", "prompt", "opencode", "Say hello from OpenCode", "--wait", "--timeout", "30000");
+  const requests = await until(async () => {
+    const response = await fetch(`http://127.0.0.1:${mockReady.port}/__mock/requests`);
+    const entries = await response.json();
+    return entries.some((entry) => entry.method === "POST" && entry.url === "/v1/chat/completions") ? entries : undefined;
+  }, 15_000, "OpenCode to call the POM model");
+  assert(requests.some((entry) => entry.method === "POST" && entry.authorization === `Bearer ${key}`), "OpenCode did not use the current POM credential");
+  console.log("OpenCode called the POM model with the current credential");
 } catch (error) {
   console.error("Windows end-to-end failure:", error, "\nlauncher logs:", logs);
   throw error;
