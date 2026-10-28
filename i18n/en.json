@@ -9,5 +9,9 @@
   "copy": "Copy",
   "copyPending": "Clipboard blocked. Try Copy or Shift+drag, then Ctrl+C.",
   "agentInstalling": "Setting up OpenCode. Its tab will appear when ready.",
-  "agentFailed": "OpenCode could not start. Run pom-agents in a pane to retry."
+  "agentFailed": "OpenCode could not start. Run pom-agents in a pane to retry.",
+  "loader.installing": "Installing Harness",
+  "loader.updating": "Updating Harness",
+  "step.runtime": "Unpacking herdr, pi and Node.js",
+  "step.launch": "Starting herdr and pi"
 }

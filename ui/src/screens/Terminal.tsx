@@ -2,13 +2,17 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getPluginAsset, usePluginI18n } from "../host/runtime";
+import { getPluginAsset, hostVersion, loader, onLoaderRetry, rpc, usePluginI18n } from "../host/runtime";
 import { useScreenReady } from "../host/ready";
 import { clipboardShortcut, copyTerminalText, osc52Text } from "../terminal/clipboard";
 import { PROXY_PREFIX, resizeMessage, terminalUrl } from "../terminal/connection";
 
 /** `ui/runtime.json`: whether herdr and pi are up. The POM proxy knows where. */
-type RuntimeStatus = { status: "ready" } | { status: "starting" } | { status: "error"; error: string };
+type RuntimeStatus =
+  | { status: "ready" }
+  | { status: "starting"; step?: "runtime" | "launch" }
+  | { status: "installing"; step: "runtime" | "launch"; mode: "install" | "update"; progress: number }
+  | { status: "error"; error: string };
 type AgentsStatus = { state: "installing" | "ready" | "error"; message?: string };
 
 type Phase =
@@ -18,15 +22,19 @@ type Phase =
   | { kind: "disconnected" }
   | { kind: "error"; message: string };
 
+// The loader's line for each install step of `ui/runtime.json`.
+const STEP_MESSAGE = { runtime: "step.runtime", launch: "step.launch" } as const;
+
 const POLL_MS = 1000;
 const START_TIMEOUT_MS = 180_000;
 
-async function waitUntilReady(signal: AbortSignal): Promise<void> {
+async function waitUntilReady(signal: AbortSignal, report: (runtime: RuntimeStatus) => void): Promise<void> {
   const deadline = Date.now() + START_TIMEOUT_MS;
   for (;;) {
     const runtime = await getPluginAsset<RuntimeStatus>("ui/runtime.json");
     if (runtime.status === "ready") return;
     if (runtime.status === "error") throw new Error(runtime.error);
+    if (!signal.aborted) report(runtime);
     if (Date.now() > deadline) throw new Error("timed out waiting for the terminal runtime");
     await new Promise((resolve) => setTimeout(resolve, POLL_MS));
     if (signal.aborted) throw new DOMException("aborted", "AbortError");
@@ -52,6 +60,16 @@ export function Terminal() {
   const [phase, setPhase] = useState<Phase>({ kind: "starting" });
   const [attempt, setAttempt] = useState(0);
   const retry = useCallback(() => setAttempt((value) => value + 1), []);
+  // POM's loader covers the screen while the runtime installs and starts (host version 7).
+  const covered = hostVersion() >= 7;
+  // `t` is a new function on every render; the start effect must not run on renders.
+  const say = useRef(t);
+  say.current = t;
+  // An install ran in this mount: the end is a success, not a plain opening.
+  const installed = useRef(false);
+
+  // "Try again" on the loader: start the runtime again, then wait for it.
+  useEffect(() => onLoaderRetry(() => void rpc("retry").catch(() => undefined).then(retry)), [retry]);
 
   // The terminal itself is the content of this screen: the host opens it after
   // herdr first renders, or when a failure to show has settled, not while the
@@ -64,8 +82,26 @@ export function Terminal() {
     setPhase({ kind: "starting" });
     setPendingCopy(null);
     setAgentsStatus(null);
+    if (covered) void loader.show();
 
-    waitUntilReady(controller.signal)
+    const report = (runtime: RuntimeStatus) => {
+      if (!covered) return;
+      const text = say.current;
+      if (runtime.status === "installing") {
+        installed.current = true;
+        void loader.progress({
+          title: text(runtime.mode === "update" ? "loader.updating" : "loader.installing"),
+          progress: runtime.progress,
+          message: text(STEP_MESSAGE[runtime.step]),
+        });
+      } else if (runtime.status === "starting") {
+        void (installed.current
+          ? loader.progress({ progress: 100, message: text("starting") })
+          : loader.show({ message: text("starting") }));
+      }
+    };
+
+    waitUntilReady(controller.signal, report)
       .then(() => {
         const element = host.current;
         if (controller.signal.aborted || !element) return;
@@ -140,6 +176,8 @@ export function Terminal() {
             if (!rendered && !controller.signal.aborted) {
               rendered = true;
               setPhase({ kind: "connected" });
+              if (covered) void (installed.current ? loader.success() : loader.hide());
+              installed.current = false;
               term.focus();
             }
           });
@@ -168,14 +206,16 @@ export function Terminal() {
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
-        setPhase({ kind: "error", message: error instanceof Error ? error.message : String(error) });
+        const message = error instanceof Error ? error.message : String(error);
+        setPhase({ kind: "error", message });
+        if (covered) void loader.error({ message });
       });
 
     return () => {
       controller.abort();
       for (const dispose of cleanup.reverse()) dispose();
     };
-  }, [attempt]);
+  }, [attempt, covered]);
 
   useEffect(() => {
     if (phase.kind !== "connected") return;
@@ -207,8 +247,9 @@ export function Terminal() {
     });
   };
 
+  // On host version 7 POM's loader draws the start and its failure; the screen keeps only "disconnected".
   const overlay =
-    phase.kind === "connected" ? null : phase.kind === "error" ? (
+    phase.kind === "connected" || (covered && phase.kind !== "disconnected") ? null : phase.kind === "error" ? (
       <div className="pb-status" role="alert">
         <p className="pb-status-title">{t("failed")}</p>
         <p className="pb-status-detail">{phase.message}</p>

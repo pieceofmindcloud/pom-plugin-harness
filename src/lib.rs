@@ -124,6 +124,11 @@ fn query_inner(state: &PluginState, request: &[u8]) -> Result<Value, String> {
             Ok(json!({"status": "configured"}))
         }
         "ui.upstream" => Ok(state.supervisor.status().upstream_json()),
+        // The loader's "Try again". Plugins are local to their node, so every
+        // node profile may restart its own harness.
+        "rpc.retry" => Ok(json!({
+            "status": if state.supervisor.retry() { "starting" } else { "unconfigured" }
+        })),
         "ui.asset" => {
             let path = request["path"].as_str().ok_or("asset path is missing")?;
             if path == RUNTIME_ASSET {
