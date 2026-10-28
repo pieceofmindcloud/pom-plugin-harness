@@ -22,7 +22,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, unwatchFile, watchFile, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, unwatchFile, watchFile, writeFileSync } from "node:fs";
 import http from "node:http";
 import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
@@ -57,7 +57,13 @@ const workspaceRoot = env.HARNESS_POM_WORKSPACE_ROOT || "";
 const workspace = workspaceRoot || join(dataDir, "workspace");
 const herdrBin = join(here, "bin", isWindows ? "herdr.exe" : "herdr");
 const nodeBin = process.execPath;
-const piCli = join(here, "app", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "bundle", "cli.js");
+// pi runs from a copy of the bundled one laid out as an npm global prefix, so
+// `pi update` can replace it with npm (see `seedPi`).
+const PI_PACKAGE = join("@earendil-works", "pi-coding-agent");
+const bundledModules = join(here, "app", "node_modules");
+const piPrefix = join(dataDir, "pi");
+const piModules = isWindows ? join(piPrefix, "node_modules") : join(piPrefix, "lib", "node_modules");
+const piToolsDir = join(dataDir, "pi-tools");
 const TOKEN_HEADER = "x-pom-plugin-token";
 const MODEL_POLL_MS = Number(env.HARNESS_POM_MODEL_POLL_MS || 15_000);
 const PROVIDER = "pom";
@@ -153,14 +159,73 @@ function pickShell() {
 }
 
 /** `pi` on the panes' PATH always runs the bundled release on the bundled Node. */
+/** Whether the bundled pi must replace the one under the pi prefix: none yet, or an older one. */
+export function shouldSeedPi(installed, bundled) {
+  return !installed || compareVersions(bundled, installed) > 0;
+}
+
+/** Numeric dotted version order; a pre-release sorts before its release. */
+export function compareVersions(left, right) {
+  const parse = (version) => {
+    const [core, pre] = String(version).split("-", 2);
+    return { parts: core.split(".").map((part) => Number.parseInt(part, 10) || 0), pre };
+  };
+  const a = parse(left);
+  const b = parse(right);
+  for (let index = 0; index < Math.max(a.parts.length, b.parts.length); index += 1) {
+    const difference = (a.parts[index] ?? 0) - (b.parts[index] ?? 0);
+    if (difference !== 0) return Math.sign(difference);
+  }
+  if (a.pre === b.pre) return 0;
+  if (!a.pre) return 1;
+  if (!b.pre) return -1;
+  return a.pre < b.pre ? -1 : 1;
+}
+
+/**
+ * pi only updates itself (`pi update`) when it is installed in a writable npm
+ * global prefix. The runtime's copy is replaced with every release, so pi runs
+ * from a copy of the bundled `node_modules` under `data/pi`, laid out as one
+ * (`lib/node_modules`, or `node_modules` on Windows). The copy is made on the
+ * first start and again only when a release bundles a newer pi than the one
+ * there, so a pi the user updated is kept.
+ */
+function seedPi() {
+  const installed = readJson(join(piModules, PI_PACKAGE, "package.json"), undefined)?.version;
+  const bundled = readJson(join(bundledModules, PI_PACKAGE, "package.json"), undefined)?.version;
+  if (!bundled || !shouldSeedPi(installed, bundled)) return;
+  rmSync(piModules, { recursive: true, force: true });
+  mkdirSync(dirname(piModules), { recursive: true });
+  cpSync(bundledModules, piModules, { recursive: true, verbatimSymlinks: true });
+  log(`pi ${bundled} copied to ${piPrefix}${installed ? ` (was ${installed})` : ""}`);
+}
+
+/** The pi command line: the `bin` of the package under the pi prefix. */
+function piCli() {
+  const manifest = readJson(join(piModules, PI_PACKAGE, "package.json"), {});
+  const bin = typeof manifest.bin === "string" ? manifest.bin : manifest.bin?.pi ?? "dist/bundle/cli.js";
+  return join(piModules, PI_PACKAGE, bin);
+}
+
+/**
+ * `pi` on the panes' PATH. pi also gets an `npm` (the runtime's) whose global
+ * prefix is pi's own, which is what `pi update` runs and asks `npm root -g`.
+ */
 function writePiWrapper() {
+  seedPi();
   mkdirSync(binDir, { recursive: true });
+  mkdirSync(piToolsDir, { recursive: true });
+  const cli = piCli();
   if (isWindows) {
-    writeFileSync(join(binDir, "pi.cmd"), `@set "CHROME_DEVTOOLS_AXI_SESSION=pi"\r\n@"${nodeBin}" "${piCli}" %*\r\n`);
+    writeFileSync(join(piToolsDir, "npm.cmd"), `@set "NPM_CONFIG_PREFIX=${piPrefix}"\r\n@set "NPM_CONFIG_UPDATE_NOTIFIER=false"\r\n@"${nodeBin}" "${npmCli}" %*\r\n`);
+    writeFileSync(join(binDir, "pi.cmd"), `@set "CHROME_DEVTOOLS_AXI_SESSION=pi"\r\n@set "PATH=${piToolsDir};%PATH%"\r\n@"${nodeBin}" "${cli}" %*\r\n`);
     return;
   }
+  const npm = join(piToolsDir, "npm");
+  writeFileSync(npm, `#!/bin/sh\nNPM_CONFIG_PREFIX="${piPrefix}" NPM_CONFIG_UPDATE_NOTIFIER=false exec "${nodeBin}" "${npmCli}" "$@"\n`);
+  chmodSync(npm, 0o755);
   const path = join(binDir, "pi");
-  writeFileSync(path, `#!/bin/sh\nCHROME_DEVTOOLS_AXI_SESSION=pi exec "${nodeBin}" "${piCli}" "$@"\n`);
+  writeFileSync(path, `#!/bin/sh\nPATH="${piToolsDir}:$PATH" CHROME_DEVTOOLS_AXI_SESSION=pi exec "${nodeBin}" "${cli}" "$@"\n`);
   chmodSync(path, 0o755);
 }
 
@@ -457,15 +522,59 @@ async function ensurePiWorkspace(runEnv) {
   if (existing.length > 0) {
     const pom = existing.find((entry) => entry.label === "POM") ?? existing[0];
     const cwd = await workspaceCwd(runEnv, pom.workspace_id);
-    if (!workspaceMoved(cwd, workspace)) return;
+    if (!workspaceMoved(cwd, workspace)) {
+      await restartPi(runEnv, pom.workspace_id);
+      return;
+    }
     log(`the POM workspace runs in ${cwd}, not in ${workspace}: making it again there`);
     await herdrJson(runEnv, ["workspace", "close", pom.workspace_id]);
   }
   mkdirSync(workspace, { recursive: true });
   const created = await herdrJson(runEnv, ["workspace", "create", "--cwd", workspace, "--label", "POM", "--focus"]);
   const pane = created.root_pane.pane_id;
-  await herdrJson(runEnv, ["agent", "start", "pi", "--kind", "pi", "--pane", pane, "--timeout", "60000"]);
+  await startAgent(runEnv, "pi", pane);
   log(`started pi in herdr pane ${pane}`);
+}
+
+/**
+ * herdr restores the POM workspace's tabs and panes, but each restored pane
+ * runs a fresh shell: pi, which the plugin started in its tab, does not come
+ * back by itself. Start it again in that tab's pane when no agent runs there.
+ */
+async function restartPi(runEnv, workspaceId) {
+  const tabs = (await herdrJson(runEnv, ["tab", "list"])).tabs ?? [];
+  const tab = piTab(tabs, workspaceId);
+  if (!tab) return;
+  const panes = (await herdrJson(runEnv, ["pane", "list"])).panes ?? [];
+  const pane = panes.find((item) => item.tab_id === tab.tab_id)?.pane_id;
+  if (!pane) return;
+  const active = new Set((await herdrJson(runEnv, ["agent", "list"])).agents?.map((agent) => agent.pane_id) ?? []);
+  if (active.has(pane)) return;
+  await startAgent(runEnv, "pi", pane);
+  log(`started pi again in restored herdr pane ${pane}`);
+}
+
+/** pi's tab in the POM workspace: the one named "pi", or the first tab before it was named. */
+export function piTab(tabs, workspaceId) {
+  const own = tabs.filter((tab) => tab.workspace_id === workspaceId);
+  return own.find((tab) => tab.label === "pi") ?? own.find((tab) => tab.number === 1) ?? null;
+}
+
+/**
+ * `herdr agent start` in a pane. A pane just created or restored may still be
+ * starting its shell (PowerShell on Windows is slow): wait for herdr to
+ * recognize it before handing it the agent command.
+ */
+async function startAgent(runEnv, kind, pane) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await herdrJson(runEnv, ["agent", "start", kind, "--kind", kind, "--pane", pane, "--timeout", "60000"]);
+      return;
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes("agent_pane_busy") || attempt >= 19) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
 }
 
 // --- Terminal endpoint -------------------------------------------------------
@@ -618,24 +727,12 @@ async function openAgentTabs(runEnv, kinds) {
     if (!active.has(pane)) toStart.push({ agent, pane });
   }
   await Promise.all(toStart.map(async ({ agent, pane }) => {
-    // A newly created Windows pane may still be starting PowerShell. Wait for
-    // herdr to recognize its shell before handing it the agent command.
-    for (let attempt = 0; ; attempt += 1) {
-      try {
-        await herdrJson(runEnv, [
-          "agent", "start", agent.kind, "--kind", agent.kind, "--pane", pane, "--timeout", "60000",
-        ]);
-        // Process detection alone says "idle" while OpenCode's first-run TUI
-        // is still blank. Keep the setup notice until the app actually draws.
-        if (agent.kind === "opencode") await herdr(runEnv, [
-          "pane", "wait-output", "--match", "█▀▀█", "--source", "visible", "--timeout", "120000", pane,
-        ]);
-        return;
-      } catch (error) {
-        if (!(error instanceof Error) || !error.message.includes("agent_pane_busy") || attempt >= 19) throw error;
-        await new Promise((resolve) => setTimeout(resolve, 500));
-      }
-    }
+    await startAgent(runEnv, agent.kind, pane);
+    // Process detection alone says "idle" while OpenCode's first-run TUI
+    // is still blank. Keep the setup notice until the app actually draws.
+    if (agent.kind === "opencode") await herdr(runEnv, [
+      "pane", "wait-output", "--match", "█▀▀█", "--source", "visible", "--timeout", "120000", pane,
+    ]);
   }));
 }
 

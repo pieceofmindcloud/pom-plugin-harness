@@ -3,11 +3,14 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
   browserSkillForVersion,
+  compareVersions,
+  shouldSeedPi,
   herdrConfig,
   windowsPaneShell,
   withDefaultShell,
   listWorkspaceProjects,
   parseClientMessage,
+  piTab,
   privateEnv,
   socketPath,
   terminalSize,
@@ -24,6 +27,26 @@ test("the browser skill pins the CLI version built into the runtime", () => {
   const skill = browserSkillForVersion(template, "0.1.39");
   assert.doesNotMatch(skill, /@AXI_VERSION@/);
   assert.equal((skill.match(/chrome-devtools-axi@0\.1\.39/g) ?? []).length, 3);
+});
+
+test("the bundled pi replaces the copy only when there is none or the bundled one is newer", () => {
+  assert.equal(shouldSeedPi(undefined, "1.3.0"), true);
+  assert.equal(shouldSeedPi("1.3.0", "1.3.0"), false);
+  assert.equal(shouldSeedPi("1.4.0", "1.3.0"), false, "a pi the user updated is kept");
+  assert.equal(shouldSeedPi("1.3.0", "1.10.0"), true);
+  assert.equal(compareVersions("1.4.0-rc.1", "1.4.0"), -1);
+  assert.equal(compareVersions("2.0.0", "1.99.9"), 1);
+});
+
+test("pi's tab is the one named pi in the POM workspace, or its first tab before it was named", () => {
+  const tabs = [
+    { tab_id: "a", workspace_id: "other", number: 1, label: "pi" },
+    { tab_id: "b", workspace_id: "pom", number: 1, label: "1" },
+    { tab_id: "c", workspace_id: "pom", number: 2, label: "OpenCode" },
+  ];
+  assert.equal(piTab(tabs, "pom").tab_id, "b");
+  assert.equal(piTab([...tabs, { tab_id: "d", workspace_id: "pom", number: 3, label: "pi" }], "pom").tab_id, "d");
+  assert.equal(piTab(tabs, "missing"), null);
 });
 
 test("a workspace restored in another folder than the POM's is made again there", () => {
