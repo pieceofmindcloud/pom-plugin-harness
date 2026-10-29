@@ -179,17 +179,17 @@ test("opencode: only the pom provider is managed, the user's providers and choic
 test("the POM's per-model limits are read from /v1/models", () => {
   const body = {
     data: [
-      { id: "qwen", context_length: 65536, max_input_tokens: 65536, max_tokens: 65536 },
-      { id: "qwen@d-1", top_provider: { context_length: 32768, max_completion_tokens: 32768 } },
+      { id: "qwen", context_length: 65536, max_input_tokens: 65536, max_tokens: 65536, capabilities: { vision: true } },
+      { id: "qwen@d-1", top_provider: { context_length: 32768, max_completion_tokens: 32768 }, capabilities: { vision: false } },
       { id: "pending", context_length: null, max_tokens: null },
       { id: "qwen", context_length: 1 },
       { id: "" },
     ],
   };
   assert.deepEqual(parsePomModels(body), [
-    { id: "qwen", contextWindow: 65536, maxTokens: 65536 },
-    { id: "qwen@d-1", contextWindow: 32768, maxTokens: 32768 },
-    { id: "pending" },
+    { id: "qwen", contextWindow: 65536, maxTokens: 65536, vision: true },
+    { id: "qwen@d-1", contextWindow: 32768, maxTokens: 32768, vision: false },
+    { id: "pending", vision: false },
   ]);
   assert.deepEqual(parsePomModels({}), []);
 });

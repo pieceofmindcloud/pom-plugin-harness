@@ -349,8 +349,9 @@ export function withPomProvider(current, baseUrl, models) {
       api: "openai-completions",
       apiKey: "$POM_API_KEY",
       // The POM's limits per model; without them pi assumes 128000 and 16384.
-      models: models.map(({ id, contextWindow, maxTokens }) => ({
+      models: models.map(({ id, contextWindow, maxTokens, vision }) => ({
         id,
+        input: vision === true ? ["text", "image"] : ["text"],
         ...(contextWindow && { contextWindow }),
         ...(maxTokens && { maxTokens }),
       })),

@@ -164,16 +164,20 @@ test("pi trusts the plugin's working folder once and keeps any saved decision", 
 
 test("pi's POM provider follows the node's models and keeps the user's providers", () => {
   const current = { providers: { ollama: { baseUrl: "http://localhost:11434/v1" } } };
-  const models = [{ id: "a", contextWindow: 65536, maxTokens: 65536 }, { id: "b" }];
+  const models = [{ id: "a", contextWindow: 65536, maxTokens: 65536, vision: true }, { id: "b", vision: false }];
   const next = withPomProvider(current, "http://127.0.0.1:8080/v1", models);
   assert.deepEqual(next.providers.ollama, current.providers.ollama);
   assert.deepEqual(next.providers.pom, {
     baseUrl: "http://127.0.0.1:8080/v1",
     api: "openai-completions",
     apiKey: "$POM_API_KEY",
-    models: [{ id: "a", contextWindow: 65536, maxTokens: 65536 }, { id: "b" }],
+    models: [
+      { id: "a", input: ["text", "image"], contextWindow: 65536, maxTokens: 65536 },
+      { id: "b", input: ["text"] },
+    ],
   });
   assert.equal(withPomProvider(next, "http://127.0.0.1:8080/v1", []).providers.pom, undefined);
+  assert.deepEqual(withPomProvider({}, "u", [{ id: "unknown" }]).providers.pom.models[0].input, ["text"], "missing metadata must never enable vision");
 });
 
 test("pi's saved POM login follows the current node key instead of overriding models.json", () => {

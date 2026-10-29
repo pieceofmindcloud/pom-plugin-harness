@@ -146,10 +146,11 @@ export function preferredModel(modelIds) {
 }
 
 /**
- * The POM's `/v1/models` rows as `{ id, contextWindow?, maxTokens? }`. The node
- * publishes each deployment's effective context (`context_length`, also as
- * `max_input_tokens`) and the output ceiling of one request (`max_tokens`);
- * both are absent while the deployment's capacity is still being confirmed.
+ * The POM's `/v1/models` rows as `{ id, contextWindow?, maxTokens?, vision }`.
+ * The node publishes each deployment's effective context (`context_length`,
+ * also as `max_input_tokens`), output ceiling (`max_tokens`), and whether its
+ * serving head has a vision projector (`capabilities.vision`). Missing vision
+ * metadata means text-only, never an inferred image capability.
  */
 export function parsePomModels(body) {
   const rows = Array.isArray(body?.data) ? body.data : [];
@@ -159,7 +160,8 @@ export function parsePomModels(body) {
     if (!id || models.some((model) => model.id === id)) continue;
     const contextWindow = positiveInt(row.context_length ?? row.max_input_tokens ?? row.top_provider?.context_length);
     const maxTokens = positiveInt(row.max_tokens ?? row.top_provider?.max_completion_tokens);
-    models.push({ id, ...(contextWindow && { contextWindow }), ...(maxTokens && { maxTokens }) });
+    const vision = row.capabilities?.vision === true;
+    models.push({ id, ...(contextWindow && { contextWindow }), ...(maxTokens && { maxTokens }), vision });
   }
   return models;
 }

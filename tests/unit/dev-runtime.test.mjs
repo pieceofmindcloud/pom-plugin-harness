@@ -38,7 +38,7 @@ test("dev rebuild replaces stale agent pins and scripts rather than repackaging 
     execFileSync("tar", ["-xzf", archive, "-C", shellPath(extracted), "launcher.mjs", "agents.mjs"]);
     const { withPomProvider } = await import(pathToFileURL(join(extracted, "launcher.mjs")));
     assert.deepEqual(withPomProvider({}, "http://pom/v1", [{ id: "qwen", contextWindow: 32768, maxTokens: 4096 }]).providers.pom.models,
-      [{ id: "qwen", contextWindow: 32768, maxTokens: 4096 }]);
+      [{ id: "qwen", input: ["text"], contextWindow: 32768, maxTokens: 4096 }]);
     const agents = JSON.parse(execFileSync("tar", ["-xOf", archive, "agents.json"], { encoding: "utf8" }));
     assert.deepEqual(agents, { npm: { "opencode-ai": "1.2.3", "chrome-devtools-axi": "0.1.44" } });
     const runtime = JSON.parse(execFileSync("tar", ["-xOf", archive, "runtime.json"], { encoding: "utf8" }));
