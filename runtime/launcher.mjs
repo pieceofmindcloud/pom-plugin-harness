@@ -150,6 +150,12 @@ export function privateEnv(options) {
     result.BASH_SILENCE_DEPRECATION_WARNING = "1";
   }
   if (options.socket) result.HERDR_SOCKET_PATH = options.socket;
+  // Chrome cannot create its sandbox namespaces in Docker's default security
+  // profile. Keep this confined to Linux containers: on a host Chrome should
+  // retain its sandbox. /dev/shm is only 64 MiB in the default Docker setup.
+  if (platform === "linux" && (options.container ?? existsSync("/.dockerenv"))) {
+    result.CHROME_DEVTOOLS_AXI_CHROME_ARGS = "--no-sandbox --disable-dev-shm-usage";
+  }
   return result;
 }
 

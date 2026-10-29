@@ -108,6 +108,14 @@ test("herdr and pi get a private environment, never the host's herdr session", (
   assert.equal(result.BASH_SILENCE_DEPRECATION_WARNING, "1");
 });
 
+test("AXI gets container-only Chrome flags without disabling the host's sandbox", () => {
+  const options = { platform: "linux", base: {}, home: "/home/agent", binDir: "/bin", herdrBin: "/bin/herdr", apiKey: "test" };
+  assert.equal(privateEnv({ ...options, container: true }).CHROME_DEVTOOLS_AXI_CHROME_ARGS, "--no-sandbox --disable-dev-shm-usage");
+  assert.equal(privateEnv({ ...options, container: false }).CHROME_DEVTOOLS_AXI_CHROME_ARGS, undefined);
+  assert.equal(privateEnv({ ...options, platform: "darwin", container: true }).CHROME_DEVTOOLS_AXI_CHROME_ARGS, undefined);
+  assert.equal(privateEnv({ ...options, container: false, base: { CHROME_DEVTOOLS_AXI_CHROME_ARGS: "--remote-debugging-port=9999" } }).CHROME_DEVTOOLS_AXI_CHROME_ARGS, undefined, "do not leak ambient browser settings");
+});
+
 test("on Windows herdr's %APPDATA% and the system PATH stay private too", () => {
   const result = privateEnv({
     platform: "win32",
