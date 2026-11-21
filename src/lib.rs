@@ -8,7 +8,7 @@
 
 mod supervisor;
 
-use supervisor::{Gateway, Supervisor};
+use supervisor::{note_plugins_changed, plugin_directory, Gateway, Supervisor};
 
 use serde_json::{json, Value};
 use std::ffi::{c_char, c_void};
@@ -122,6 +122,15 @@ fn query_inner(state: &PluginState, request: &[u8]) -> Result<Value, String> {
                 .supervisor
                 .configure(Gateway::from_configure(&request)?);
             Ok(json!({"status": "configured"}))
+        }
+        // A plugin installed, updated or removed on this machine: the launcher
+        // reads the listing again (Goose's tab follows the Goose plugin).
+        "host.event" => {
+            if let (Some(kind), Ok(base)) = (request["event"]["type"].as_str(), plugin_directory())
+            {
+                note_plugins_changed(&base.join("data"), kind);
+            }
+            Ok(json!({"status": "ok"}))
         }
         "ui.upstream" => Ok(state.supervisor.status().upstream_json()),
         // The loader's "Try again". Plugins are local to their node, so every

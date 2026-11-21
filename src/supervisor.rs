@@ -39,6 +39,37 @@ pub struct Gateway {
     pub openai_base_url: String,
     pub api_key: String,
     pub workspace_root: Option<String>,
+    /// The node's loopback API for plugins: the launcher reads the plugins
+    /// installed on this machine there (Goose's tab depends on it).
+    pub host_api: Option<HostApi>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HostApi {
+    pub base_url: String,
+    pub token: String,
+}
+
+/// Touched on each `plugin.*` event; the launcher watches it and reads the
+/// plugin listing again.
+pub const PLUGINS_STAMP: &str = "plugins-changed";
+
+/// Notes a `plugin.installed`/`updated`/`removed` event under `data_dir`.
+/// Returns whether the event was one of those.
+pub fn note_plugins_changed(data_dir: &Path, event_type: &str) -> bool {
+    if !matches!(
+        event_type,
+        "plugin.installed" | "plugin.updated" | "plugin.removed"
+    ) {
+        return false;
+    }
+    let _ = fs::create_dir_all(data_dir);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis())
+        .unwrap_or_default();
+    let _ = fs::write(data_dir.join(PLUGINS_STAMP), format!("{now}\n"));
+    true
 }
 
 impl Gateway {
@@ -59,10 +90,27 @@ impl Gateway {
             Some(Value::String(_)) => None,
             Some(_) => return Err("workspace_root must be a string or null".into()),
         };
+        let host_api = request["host_api"]["base_url"]
+            .as_str()
+            .filter(|url| {
+                url.starts_with("http://127.0.0.1")
+                    || url.starts_with("http://localhost")
+                    || url.starts_with("http://[::1]")
+            })
+            .zip(
+                request["host_api"]["token"]
+                    .as_str()
+                    .filter(|token| !token.is_empty()),
+            )
+            .map(|(base_url, token)| HostApi {
+                base_url: base_url.to_owned(),
+                token: token.to_owned(),
+            });
         Ok(Self {
             openai_base_url: openai_base_url.to_owned(),
             api_key: api_key.to_owned(),
             workspace_root,
+            host_api,
         })
     }
 }
@@ -305,6 +353,22 @@ impl Supervisor {
                 "HARNESS_POM_WORKSPACE_ROOT",
                 gateway.workspace_root.as_deref().unwrap_or(""),
             )
+            .env(
+                "HARNESS_POM_HOST_API_URL",
+                gateway
+                    .host_api
+                    .as_ref()
+                    .map(|api| api.base_url.as_str())
+                    .unwrap_or(""),
+            )
+            .env(
+                "HARNESS_POM_HOST_API_TOKEN",
+                gateway
+                    .host_api
+                    .as_ref()
+                    .map(|api| api.token.as_str())
+                    .unwrap_or(""),
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -404,7 +468,7 @@ impl Supervisor {
 }
 
 /// `<dir of POM_PLUGIN_DB>/harness`, the data home the POM gives this plugin.
-fn plugin_directory() -> Result<PathBuf, String> {
+pub(crate) fn plugin_directory() -> Result<PathBuf, String> {
     let parent = std::env::var_os("POM_PLUGIN_DB")
         .map(PathBuf::from)
         .and_then(|database| database.parent().map(Path::to_path_buf))
@@ -624,6 +688,40 @@ mod tests {
     }
 
     #[test]
+    fn host_api_is_kept_for_the_plugin_listing() {
+        let gateway = Gateway::from_configure(&json!({
+            "gateway": {"openai_base_url": "http://127.0.0.1:8080/v1", "api_key": "sk-1"},
+            "host_api": {"base_url": "http://127.0.0.1:8080/api/plugin-host", "token": "t0k"}
+        }))
+        .unwrap();
+        assert_eq!(
+            gateway.host_api,
+            Some(HostApi {
+                base_url: "http://127.0.0.1:8080/api/plugin-host".into(),
+                token: "t0k".into()
+            })
+        );
+        // A host_api that is not loopback HTTP is ignored, not fatal.
+        let gateway = Gateway::from_configure(&json!({
+            "gateway": {"openai_base_url": "http://127.0.0.1:8080/v1", "api_key": "sk-1"},
+            "host_api": {"base_url": "file:///x", "token": "t"}
+        }))
+        .unwrap();
+        assert_eq!(gateway.host_api, None);
+    }
+
+    #[test]
+    fn plugin_events_touch_the_listing_stamp() {
+        let dir = std::env::temp_dir().join(format!("harness-stamp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(note_plugins_changed(&dir, "plugin.installed"));
+        assert!(dir.join(PLUGINS_STAMP).is_file());
+        assert!(note_plugins_changed(&dir, "plugin.removed"));
+        assert!(!note_plugins_changed(&dir, "model.serving"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn configuration_comes_only_from_the_pom_request() {
         let request =
             json!({"gateway": {"openai_base_url": "http://127.0.0.1:8080/v1", "api_key": "sk-1"}});
@@ -633,6 +731,7 @@ mod tests {
                 openai_base_url: "http://127.0.0.1:8080/v1".into(),
                 api_key: "sk-1".into(),
                 workspace_root: None,
+                host_api: None,
             })
         );
         assert_eq!(

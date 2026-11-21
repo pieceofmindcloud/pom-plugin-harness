@@ -141,7 +141,7 @@ if [[ -d "$stage/app/node_modules/node-pty/prebuilds" ]]; then
 fi
 find "$stage/app/node_modules" -name '*.d.ts' -type f -delete
 
-cp "$root/runtime/launcher.mjs" "$root/runtime/agents.mjs" "$root/runtime/agent-setup.mjs" "$root/runtime/browser-skill.md" "$stage/"
+cp "$root/runtime/launcher.mjs" "$root/runtime/agents.mjs" "$root/runtime/agent-setup.mjs" "$root/runtime/goose.mjs" "$root/runtime/browser-skill.md" "$stage/"
 
 # Agents installed on first use, pinned here.
 npm_exact() {

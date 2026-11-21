@@ -38,6 +38,7 @@ import {
   parsePomModels,
   preferredModel,
 } from "./agents.mjs";
+import { GOOSE_TAB, configureGoose, ensureGoose, gooseEnabled, installedPlugins, removeGooseCommand } from "./goose.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(join(here, "app", "package.json"));
@@ -864,6 +865,84 @@ async function startAgents(runEnv, models) {
   };
 }
 
+// --- Goose (only while the Goose plugin is installed) --------------------------
+
+const hostApiUrl = (env.HARNESS_POM_HOST_API_URL || "").replace(/\/+$/, "");
+const hostApiToken = env.HARNESS_POM_HOST_API_TOKEN || "";
+const installedPluginsPath = join(dataDir, "installed-plugins.json");
+const pluginsStampPath = join(dataDir, "plugins-changed");
+
+/** Reads the plugins installed on this machine from the POM into `installed-plugins.json`. */
+async function refreshInstalledPlugins() {
+  if (!hostApiUrl || !hostApiToken) return;
+  const response = await fetch(`${hostApiUrl}/plugins`, { headers: { "x-pom-plugin-host-token": hostApiToken } });
+  if (!response.ok) throw new Error(`plugin listing: HTTP ${response.status}`);
+  const body = await response.json();
+  const plugins = (Array.isArray(body?.plugins) ? body.plugins : []).map(({ code, version }) => ({ code, version }));
+  writeFileSync(`${installedPluginsPath}.tmp`, `${JSON.stringify({ plugins }, null, 2)}\n`);
+  renameSync(`${installedPluginsPath}.tmp`, installedPluginsPath);
+}
+
+/** A "goose" tab in the POM workspace running `goose session`; an open one is reused. */
+async function openGooseTab(runEnv, restart) {
+  const pom = await pomWorkspace(runEnv);
+  if (!pom) return;
+  const listed = await herdrJson(runEnv, ["tab", "list"]);
+  const existing = (listed.tabs ?? []).find((tab) => tab.workspace_id === pom.workspace_id && tab.label === GOOSE_TAB);
+  if (existing && !restart) return;
+  const tab = existing ?? await herdrJson(runEnv, [
+    "tab", "create", "--workspace", pom.workspace_id, "--cwd", workspace, "--label", GOOSE_TAB, "--no-focus",
+  ]);
+  const pane = existing
+    ? ((await herdrJson(runEnv, ["pane", "list"])).panes ?? []).find((item) => item.tab_id === tab.tab_id)?.pane_id
+    : tab.root_pane.pane_id;
+  if (!pane) throw new Error("goose tab has no pane");
+  await herdr(runEnv, ["pane", "run", pane, "goose", "session"]);
+}
+
+/**
+ * Goose follows the Goose plugin: present, Harness installs its own pinned
+ * copy and opens the tab; removed, the `goose` command goes away and an open
+ * tab is left alone. herdr restores tabs with a fresh shell after a restart,
+ * so the first pass starts Goose again in a restored tab.
+ */
+function startGoose(runEnv, models) {
+  let latestModels = models;
+  let firstPass = true;
+  let binary;
+  let queue = Promise.resolve();
+  const apply = async () => {
+    await refreshInstalledPlugins().catch((error) => log(`plugin listing unavailable: ${error.message}`));
+    if (!gooseEnabled(installedPlugins(installedPluginsPath))) {
+      removeGooseCommand({ binDir, windows: isWindows });
+      binary = undefined;
+      firstPass = false;
+      return;
+    }
+    binary ??= await ensureGoose({ dir: join(dataDir, "goose"), log });
+    configureGoose({ root: join(dataDir, "goose-root"), binDir, binary, llmBaseUrl, models: latestModels, windows: isWindows });
+    await openGooseTab(runEnv, firstPass);
+    firstPass = false;
+    log(`goose ${binary ? "ready" : "unavailable"}`);
+  };
+  const schedule = () => {
+    queue = queue.then(apply).catch((error) => log(`goose unavailable: ${error.message}`));
+  };
+  watchFile(pluginsStampPath, { interval: 1000 }, schedule);
+  schedule();
+  return {
+    modelsChanged(next) {
+      latestModels = next;
+      queue = queue.then(() => {
+        if (binary) configureGoose({ root: join(dataDir, "goose-root"), binDir, binary, llmBaseUrl, models: next, windows: isWindows });
+      });
+    },
+    stop() {
+      unwatchFile(pluginsStampPath);
+    },
+  };
+}
+
 // --- Main -------------------------------------------------------------------
 
 async function main() {
@@ -911,7 +990,11 @@ async function main() {
       stopAgents = () => started?.stop();
     })
     .catch((error) => log(`other agents unavailable: ${error.message}`));
-  followPomModels(models, (next) => agents?.modelsChanged(next));
+  const goose = startGoose(runEnv, models);
+  followPomModels(models, (next) => {
+    agents?.modelsChanged(next);
+    goose.modelsChanged(next);
+  });
   log(`terminal on 127.0.0.1:${port}; herdr socket ${socket ?? "default"}; ${models.length} POM model(s)`);
   report({ status: "ready", port, token, models: models.map((model) => model.id), warning });
 }

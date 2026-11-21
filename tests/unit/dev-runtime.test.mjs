@@ -35,7 +35,7 @@ test("dev rebuild replaces stale agent pins and scripts rather than repackaging 
     assert.equal(entries.filter((entry) => /(?:^|\/)launcher\.mjs$/.test(entry)).length, 1);
     const extracted = join(out, "extracted");
     mkdirSync(extracted);
-    execFileSync("tar", ["-xzf", archive, "-C", shellPath(extracted), "launcher.mjs", "agents.mjs"]);
+    execFileSync("tar", ["-xzf", archive, "-C", shellPath(extracted), "launcher.mjs", "agents.mjs", "goose.mjs"]);
     const { withPomProvider } = await import(pathToFileURL(join(extracted, "launcher.mjs")));
     assert.deepEqual(withPomProvider({}, "http://pom/v1", [{ id: "qwen", contextWindow: 32768, maxTokens: 4096 }]).providers.pom.models,
       [{ id: "qwen", input: ["text"], contextWindow: 32768, maxTokens: 4096 }]);
